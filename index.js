@@ -35,8 +35,8 @@ const allowedOrigins = [
   'http://172.20.10.13:5174',
   'http://172.28.56.116:5174',
   // Typically your Admin Dashboard
-  'https://your-urban-site.com',
-  'https://admin.your-urban-site.com'
+  'https://haryanaroyalty.netlify.app/',
+  'https://adminharyanaroyalty.netlify.app/'
 ];
 
 app.use(cors({
