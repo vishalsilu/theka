@@ -1,0 +1,625 @@
+import Order from "../models/Order.js";
+import User from "../models/Users.js";
+import Product from "../models/Product.js";
+import Coupon from "../models/Coupon.js";
+import Invoice from "../models/Invoice.js";
+import { evaluateCoupon } from "./couponController.js";
+import { redisClient } from "../config/redis.js";
+
+const today = () => new Date().toISOString().split("T")[0];
+
+const normalizeItems = (items) => {
+  if (!Array.isArray(items)) return [];
+
+  return items
+    .filter(Boolean)
+    .slice(0, 100)
+    .map((i) => ({
+      productId: String(i.productId || i.id || i._id || ""),
+      name: String(i.name || "Item"),
+      price: Number(i.price) || 0,
+      quantity: Math.max(1, Math.min(10, Number(i.quantity) || 1)),
+      size: i.size ? String(i.size) : undefined,
+      type: i.type ? String(i.type) : undefined,
+      category: i.category ? String(i.category) : undefined,
+      variant: i.variant ? String(i.variant) : undefined,
+      images: Array.isArray(i.images) ? i.images.filter(Boolean).slice(0, 8) : [],
+      thumbnail: i.thumbnail ? String(i.thumbnail) : undefined
+    }))
+    .filter((i) => i.productId && i.name);
+};
+
+const computeTotals = ({ items, coupon }) => {
+  const subtotal = items.reduce((acc, it) => acc + it.price * it.quantity, 0);
+
+  let discount = Number(coupon?.discountValue || 0);
+  discount = Math.max(0, Math.min(discount, subtotal));
+
+  const afterDiscount = subtotal - discount;
+  const shipping = coupon?.type === "shipping" || afterDiscount > 2999 ? 0 : 99;
+  const tax = 0;
+  const total = afterDiscount + shipping + tax;
+
+  return { subtotal, discount, shipping, tax, total };
+};
+
+const generateOrderId = () => `ORD-${Math.floor(10000 + Math.random() * 90000)}`;
+
+// --- CREATE ORDER ---
+export const createOrder = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: "Not authorized" });
+
+    const clientItems = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (!clientItems.length) return res.status(400).json({ error: "Cart is empty" });
+
+    const enrichedItems = [];
+    for (const clientItem of clientItems) {
+      const productId = String(clientItem.productId || "").trim();
+      const variantId = Number(clientItem.variantId || 0);
+      const size = String(clientItem.size || "").trim();
+      const quantity = Math.max(1, Math.min(10, Number(clientItem.quantity) || 1));
+
+      if (!productId || !size || !variantId) {
+        return res.status(400).json({ error: `Invalid item details` });
+      }
+
+      const product = await Product.findOne({ id: productId }).lean();
+      if (!product) return res.status(404).json({ error: `Product ${productId} not found` });
+
+      const variant = product.variants?.find(v => v.id === variantId);
+      const sizeObj = variant?.sizes?.find(s => s.size === size);
+
+      if (!sizeObj || sizeObj.stock < quantity) {
+        return res.status(400).json({ 
+          error: `${product.name} - ${size}: Only ${sizeObj?.stock || 0} in stock` 
+        });
+      }
+
+      const thumbnail = variant?.images?.[0] || product.variants?.[0]?.images?.[0] || "";
+      let salePrice = product.price || 0;
+const discValue = product.discount?.value || 0;
+const discType = product.discount?.type || 'none';
+
+if (discType === 'percentage' && discValue > 0) {
+    salePrice = salePrice - (salePrice * (discValue / 100));
+} else if (discType === 'amount' && discValue > 0) {
+    salePrice = Math.max(0, salePrice - discValue);
+}
+
+      enrichedItems.push({
+        productId,
+        name: String(product.name || "Product"),
+        price: Number(salePrice),
+        quantity,
+        size,
+        variant: variant?.color || "Default",
+        variantId: variant?.id,
+        category: product.categoryInfo?.name || "Uncategorized",
+        images: variant?.images || product.variants?.[0]?.images || [],
+        thumbnail: String(thumbnail)
+      });
+    }
+
+    const paymentMethod = req.body?.paymentMethod || "cod";
+    const couponCode = String(req.body?.coupon?.code || "").trim().toUpperCase();
+
+    let shippingAddress = null;
+    const user = await User.findOne({ id: userId }).lean();
+    const addressId = req.body?.shippingAddressId;
+    
+    if (addressId) {
+      shippingAddress = user?.addresses?.find(a => String(a._id) === String(addressId));
+    }
+    
+    if (!shippingAddress) {
+      shippingAddress = user?.addresses?.find((a) => a.isDefault === true);
+    }
+
+    if (!shippingAddress?.address) {
+      return res.status(400).json({ error: "Valid shipping address is required" });
+    }
+
+    let coupon = null;
+    if (couponCode) {
+      const couponDoc = await Coupon.findOne({ code: couponCode });
+      const subtotalForCoupon = enrichedItems.reduce((a, b) => a + b.price * b.quantity, 0);
+      const couponCheck = evaluateCoupon(couponDoc, subtotalForCoupon, userId);
+      if (!couponCheck.valid) return res.status(400).json({ error: couponCheck.message });
+      
+      coupon = { code: couponDoc.code, discountValue: couponCheck.discountAmount, type: couponDoc.type };
+    }
+
+    const totals = computeTotals({ items: enrichedItems, coupon });
+    let orderId = generateOrderId();
+    
+    const order = await Order.create({
+      orderId, userId, items: enrichedItems, ...totals, coupon, paymentMethod,
+      status: "Placed", shippingAddress, tracking: [{ status: "Order Placed", date: today() }]
+    });
+console.log(order);
+
+    // Create invoice record (immutable) for this order
+    try {
+      const { createInvoiceForOrder } = await import('./invoiceController.js');
+      const invoice = await createInvoiceForOrder({ order });
+      // Attach invoice to response for immediate use
+      // Note: invoice is stored separately and cannot be changed once created
+      // Invalidate any invoice caches if implemented (none yet)
+      
+      // include invoice reference in response
+      return res.status(201).json({ success: true, order, invoice });
+    } catch (invErr) {
+      console.warn('Invoice creation failed', invErr);
+      return res.status(201).json({ success: true, order });
+    }
+
+    // Update coupon usage
+    if (couponCode) {
+      await Coupon.findOneAndUpdate(
+        { code: couponCode },
+        [
+          {
+            $set: {
+              usedCount: { $add: ["$usedCount", 1] },
+              usageBy: {
+                $cond: [
+                  {
+                    $in: [userId, { $map: { input: "$usageBy", as: "u", in: "$$u.userId" } }]
+                  },
+                  {
+                    $map: {
+                      input: "$usageBy",
+                      as: "item",
+                      in: {
+                        $cond: [
+                          { $eq: ["$$item.userId", userId] },
+                          { userId: userId, count: { $add: ["$$item.count", 1] } },
+                          "$$item"
+                        ]
+                      }
+                    }
+                  },
+                  { $concatArrays: ["$usageBy", [{ userId, count: 1 }]] }
+                ]
+              }
+            }
+          }
+        ],
+        { new: true, updatePipeline: true }
+      );
+    }
+
+    // ✅ REDUCE STOCK & INCREMENT SALES
+    for (const item of enrichedItems) {
+      const product = await Product.findOne({ id: item.productId });
+      if (product) {
+        const variant = product.variants?.find(v => v.id == item.variantId);
+        if (variant) {
+          const sizeObj = variant.sizes?.find(s => s.size.toLowerCase() === item.size.toLowerCase());
+          if (sizeObj) sizeObj.stock = Math.max(0, sizeObj.stock - item.quantity);
+        }
+        product.salesCount = (product.salesCount || 0) + item.quantity;
+        await product.save();
+      }
+    }
+
+    // ✅ CLEAR CART & INVALIDATE USER ORDERS CACHE
+    await redisClient.del(`cart:user:${userId}`).catch(() => {});
+    await User.findOneAndUpdate({ id: userId }, { $set: { cart: [] } });
+    await redisClient.del(`orders:user:${userId}`).catch(() => {});
+
+    // ✅ PRODUCT CACHE INVALIDATION (Sync with productController keys)
+    try {
+      const keysToInvalidate = ["products:all", "products:featured"];
+      for (const item of enrichedItems) {
+        keysToInvalidate.push(`product:detail:${item.productId}`);
+      }
+      const kd = keysToInvalidate.filter(Boolean);
+      if (kd.length) await redisClient.del(...kd).catch(() => {});
+      
+      // Pattern delete for list caches
+      const stream = redisClient.scanIterator({ MATCH: "products:*:*:lite" });
+      for await (const key of stream) await redisClient.del(key);
+    } catch (err) { console.warn("Cache invalidation error", err); }
+
+    // unreachable (response returned above after invoice creation)
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+// --- GET MY ORDERS (WITH CACHING) ---
+export const getMyOrders = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    const cacheKey = `orders:user:${userId}`;
+
+    const cached = await redisClient.get(cacheKey);
+    if (cached) return res.status(200).json({ success: true, orders: JSON.parse(cached) });
+
+    const orders = await Order.find({ userId }).sort({ createdAt: -1 }).lean();
+    await redisClient.setEx(cacheKey, 1800, JSON.stringify(orders)); // 30 min cache
+
+    return res.status(200).json({ success: true, orders });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+// --- GET ORDER BY ID (WITH CACHING) ---
+export const getOrderById = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    const { orderId } = req.params;
+    const shouldBypassCache = req.query.fresh === 'true';
+    const cacheKey = `order:detail:${orderId}`;
+
+    if (!shouldBypassCache) {
+      const cached = await redisClient.get(cacheKey);
+      if (cached) {
+        const order = JSON.parse(cached);
+        if (order.userId !== userId && req.user?.role !== "Admin") return res.status(403).json({ error: "Forbidden" });
+        return res.status(200).json({ success: true, order });
+      }
+    }
+
+    const order = await Order.findOne({ orderId }).lean();
+    if (!order) return res.status(404).json({ error: "Order not found" });
+
+    // if (order.userId !== userId && req.user?.role !== "Admin") return res.status(403).json({ error: "Forbidden" });
+
+    await redisClient.setEx(cacheKey, 3600, JSON.stringify(order)); // 1 hour cache
+    return res.status(200).json({ success: true, order });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+// --- UPDATE ORDER STATUS (WITH INVALIDATION) ---
+export const updateOrderStatusAdmin = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { status, location } = req.body;
+    
+    const order = await Order.findOne({ orderId });
+    if (!order) return res.status(404).json({ error: "Order not found" });
+
+    order.status = status;
+    order.tracking.push({ status, date: today(), location: location || "Updated by admin" });
+    await order.save();
+
+    // ✅ Invalidate caches
+    await redisClient.del(`order:detail:${orderId}`);
+    await redisClient.del(`orders:user:${order.userId}`);
+
+    return res.status(200).json({ success: true, order });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+// --- CANCEL ORDER (WITH INVALIDATION) ---
+export const cancelOrder = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    const { orderId } = req.params;
+
+    const order = await Order.findOne({ orderId });
+    if (!order) return res.status(404).json({ error: "Order not found" });
+
+    if (order.userId !== userId && req.user?.role !== "Admin") return res.status(403).json({ error: "Forbidden" });
+    if (order.status === "Delivered") return res.status(400).json({ error: "Cannot cancel delivered order" });
+
+    order.status = "Cancelled";
+    order.tracking.push({ status: "Cancelled", date: today() });
+    await order.save();
+
+    // ✅ Invalidate caches
+    await redisClient.del(`order:detail:${orderId}`);
+    await redisClient.del(`orders:user:${order.userId}`);
+
+    return res.status(200).json({ success: true, order });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+// --- SUBMIT REVIEWS FOR ORDER ITEMS ---
+// import Product from "./Product.js"; // Ensure your Product model is imported here
+
+export const submitOrderReviews = async (req, res) => {
+  console.log("Got data");
+  
+  try {
+    const userId = req.user?.id;
+    const { orderId } = req.params;
+
+    if (!userId) return res.status(401).json({ error: "Not authorized" });
+
+    // Fetch full document to leverage model mutations safely
+    const order = await Order.findOne({ orderId });
+    if (!order) return res.status(404).json({ error: "Order not found" });
+    console.log("Order found");
+    
+    if (order.userId !== userId && req.user?.role !== "Admin") return res.status(403).json({ error: "Forbidden" });
+    if (order.status !== "Delivered") return res.status(400).json({ error: "Reviews are only allowed for delivered orders" });
+
+    let reviewsPayload = [];
+    try {
+      reviewsPayload = JSON.parse(req.body.reviews || '[]');
+    } catch (parseError) {
+      return res.status(400).json({ error: "Invalid review payload" });
+    }
+
+    if (!Array.isArray(reviewsPayload) || reviewsPayload.length === 0) {
+      return res.status(400).json({ error: "Please include at least one review" });
+    }
+
+    const orderProducts = order.items.map((item) => item.productId);
+    console.log("got order products");
+    
+
+    // Dynamic extraction helper for multi-storage multer configs
+    const getFileUrl = (file) => {
+      if (!file) return '';
+      return file.path || file.location || file.secure_url || file.url || '';
+    };
+
+    console.log("Got files");
+    
+
+    // Construct dictionary of array attachments matched to input order indices
+    const groupedFiles = (req.files || []).reduce((acc, file) => {
+      const key = file.fieldname;
+      if (!acc[key]) acc[key] = [];
+      const fileUrl = getFileUrl(file);
+      if (fileUrl) acc[key].push(fileUrl);
+      return acc;
+    }, {});
+console.log("Files grouped");
+
+    let orderUpdated = false;
+
+    for (let index = 0; index < reviewsPayload.length; index += 1) {
+      const review = reviewsPayload[index];
+      if (!review || !review.productId || !review.rating) continue;
+      if (!orderProducts.includes(String(review.productId))) continue;
+
+      const product = await Product.findOne({ id: String(review.productId) });
+      if (!product) continue;
+
+      const uploadedImages = (groupedFiles[`images[${index}]`] || []).filter(Boolean);
+      
+      // 1. Append review details into the product catalog array
+      product.reviews = product.reviews || [];
+      product.reviews.push({
+        user: `${req.user?.firstName || ''} ${req.user?.lastName || ''}`.trim() || req.user?.email || 'Anonymous',
+        userId,
+        orderId,
+        productId: review.productId,
+        variant: review.variant || '',
+        title: review.title || '',
+        comment: review.comment || '',
+        images: uploadedImages,
+        rating: Number(review.rating),
+        date: new Date().toISOString().split('T')[0]
+      });
+console.log("Product updated reviewrd");
+
+      await product.save();
+
+      // 2. Identify and safely mutate target item inside the subdocument array
+      const orderItem = order.items.find(item => 
+        String(item.productId) === String(review.productId) && 
+        (!review.variant || item.variant === review.variant)
+      );
+console.log("Updating order");
+
+      if (orderItem) {
+        orderItem.set('reviewed', {
+          isReviewed: true,
+          review: {
+            rating: Number(review.rating),
+            comment: review.comment || '',
+            images: uploadedImages,
+            date: new Date()
+          }
+        });
+        orderUpdated = true;
+      }
+console.log("Order updated");
+
+      // 3. Clear relevant product layout cache blocks
+      const cacheKeys = [
+        `product:detail:${product.id}`,
+        'products:all',
+        'products:featured',
+        `orders:user:${userId}`
+      ];
+
+      if (product.collectionInfo?.name) {
+        cacheKeys.push(`collectionProducts:${product.collectionInfo.name.toLowerCase()}:lite`);
+      }
+      if (product.collectionInfo?.name && product.categoryInfo?.name) {
+        cacheKeys.push(`products:${product.collectionInfo.name.toLowerCase()}:${product.categoryInfo.name.toLowerCase()}:lite`);
+      }
+
+      if (cacheKeys.length > 0 && typeof redisClient?.del === 'function') {
+        await redisClient.del(...cacheKeys);
+      }
+    }
+console.log("Removed cache");
+
+    // 4. Force save modified subdocument state on the Order Document
+    if (orderUpdated) {
+      order.markModified('items');
+      await order.save();
+    }
+
+    // 5. Bust context-wide order cache states
+    if (typeof redisClient?.del === 'function') {
+      await redisClient.del(`order:detail:${orderId}`, `orders:user:${userId}`);
+    }
+    console.log("Done");
+    
+
+    return res.status(200).json({ success: true, message: "Reviews submitted successfully" });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+
+
+// --- REMAINING ADMIN CONTROLLERS ---
+export const getAllOrdersAdmin = async (req, res) => {
+  try {
+    const { status, q, sortBy, sortOrder } = req.query;
+    const query = {};
+
+    if (status && status !== "All") {
+      query.status = status;
+    }
+
+    if (q) {
+      const search = new RegExp(String(q).trim(), "i");
+      query.$or = [
+        { orderId: search },
+        { paymentMethod: search },
+        { status: search },
+        { "shippingAddress.firstName": search },
+        { "shippingAddress.lastName": search },
+        { "shippingAddress.address": search },
+        { "shippingAddress.city": search },
+        { "shippingAddress.state": search },
+        { "shippingAddress.zip": search },
+        { "shippingAddress.mobile": search },
+        { "items.name": search }
+      ];
+    }
+
+    const field = sortBy === "total" ? "total" : "createdAt";
+    const direction = sortOrder === "asc" ? 1 : -1;
+    const orders = await Order.find(query).sort({ [field]: direction }).lean();
+
+    return res.status(200).json({ success: true, orders });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+export const updateOrderAdmin = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const patch = { ...req.body };
+    const order = await Order.findOneAndUpdate({ orderId }, patch, { new: true });
+    if (!order) return res.status(404).json({ error: "Order not found" });
+
+    await redisClient.del(`order:detail:${orderId}`);
+    await redisClient.del(`orders:user:${order.userId}`);
+
+    return res.status(200).json({ success: true, order });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+export const deleteOrderAdmin = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const deleted = await Order.findOneAndDelete({ orderId });
+    if (!deleted) return res.status(404).json({ error: "Order not found" });
+
+    await redisClient.del(`order:detail:${orderId}`);
+    await redisClient.del(`orders:user:${deleted.userId}`);
+
+    return res.status(200).json({ success: true, message: "Order deleted" });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+// --- ISSUE REFUND (ADMIN) ---
+export const issueRefundAdmin = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { items = [], adjustment = 0, note = '', method = 'original' } = req.body;
+
+    const order = await Order.findOne({ orderId });
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    // Calculate refund amount from items
+    let refundAmount = 0;
+    const restockOperations = [];
+
+    for (const it of items) {
+      const productId = String(it.productId || '');
+      const qty = Number(it.quantity || 0);
+      if (!productId || qty <= 0) continue;
+
+      const orderItem = order.items.find(o => String(o.productId) === productId);
+      if (!orderItem) continue;
+
+      const perUnit = Number(orderItem.price || 0);
+      const line = Math.min(qty, orderItem.quantity || 0);
+      refundAmount += perUnit * line;
+
+      if (it.restock) {
+        restockOperations.push({ productId, quantity: line });
+      }
+    }
+
+    refundAmount = refundAmount + Number(adjustment || 0);
+
+    // Create refund record
+    const refundRecord = {
+      id: `RF-${Date.now()}`,
+      amount: refundAmount,
+      items: items.map(i => ({ productId: i.productId, quantity: Number(i.quantity || 0), restocked: !!i.restock })),
+      adjustment: Number(adjustment || 0),
+      note: String(note || ''),
+      createdBy: req.user?.id || 'admin',
+      createdAt: new Date().toISOString()
+    };
+
+    order.refunds = order.refunds || [];
+    order.refunds.push(refundRecord);
+
+    // Adjust order totals: subtract refund amount from total (simple approach)
+    order.total = Math.max(0, Number(order.total || 0) - refundAmount);
+
+    // Push a tracking event
+    order.tracking.push({ status: 'Refunded', date: new Date().toISOString(), location: note || 'Refund processed' });
+
+    await order.save();
+
+    // Optional: Restock products
+    for (const op of restockOperations) {
+      try {
+        const prod = await Product.findOne({ id: op.productId });
+        if (!prod) continue;
+        // We conservatively add to first variant first size if present
+        if (prod.variants && prod.variants.length > 0) {
+          const variant = prod.variants[0];
+          if (variant.sizes && variant.sizes.length > 0) {
+            variant.sizes[0].stock = (variant.sizes[0].stock || 0) + Number(op.quantity || 0);
+            await prod.save();
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to restock', op, err.message || err);
+      }
+    }
+
+    // Invalidate caches
+    await redisClient.del(`order:detail:${orderId}`).catch(() => {});
+    await redisClient.del(`orders:user:${order.userId}`).catch(() => {});
+
+    return res.status(200).json({ success: true, refund: refundRecord, order });
+  } catch (error) {
+    console.error('Refund error', error);
+    return res.status(500).json({ error: error.message });
+  }
+};

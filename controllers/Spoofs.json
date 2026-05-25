@@ -1,0 +1,143 @@
+// Create Site Data
+
+{
+  "websiteName": "Urban Theka",
+  "logoUrl": "https://example.com/images/logo.png",
+  "tagline": "Modern style, everyday comfort.",
+  "hero": {
+    "title": "Wear Confidence Everyday",
+    "subtitle": "Premium essentials for every wardrobe.",
+    "ctaLabel": "Shop Collections",
+    "ctaPath": "/collections",
+    "imageDesktop": "https://example.com/images/hero-desktop.jpg",
+    "imageMobile": "https://example.com/images/hero-mobile.jpg"
+  },
+  "topOffers": [
+    {
+      "title": "New User Offer",
+      "description": "Get 10% off on your first order",
+      "code": "NEW10"
+    },
+    {
+      "title": "Free Shipping",
+      "description": "On orders above Rs 1499",
+      "code": "FREESHIP"
+    }
+  ],
+  "advertisements": [],
+  "about": {
+    "heading": "About Us",
+    "story": "We create quality-first clothing for modern lifestyles.",
+    "values": [
+      "Quality craftsmanship",
+      "Comfortable fits",
+      "Fair pricing"
+    ]
+  },
+  "contact": {
+    "heading": "Contact Us",
+    "email": "support@urbantheka.com",
+    "phone": "+91 00000 00000",
+    "address": "India",
+    "workingHours": "Mon-Sat 10AM - 8PM",
+    "socials": []
+  },
+  "navigationLinks": [
+    { "label": "Home", "path": "/" },
+    { "label": "Collections", "path": "/collections" },
+    { "label": "About Us", "path": "/about-us" },
+    { "label": "Contact Us", "path": "/contact-us" }
+  ],
+  "legalLinks": [
+    { "label": "Privacy Policy", "path": "/info/privacy-policy" },
+    { "label": "Terms of Service", "path": "/info/terms-of-service" },
+    { "label": "Return Policy", "path": "/info/return-policy" }
+  ]
+}
+
+
+// Update HEro
+
+{
+  "hero": {
+    "title": "New Season, New Style",
+    "subtitle": "Discover the freshest looks this season.",
+    "ctaLabel": "Explore Now",
+    "ctaPath": "/collections/new",
+    "imageDesktop": "https://example.com/images/hero-new-desktop.jpg",
+    "imageMobile": "https://example.com/images/hero-new-mobile.jpg"
+  }
+}
+
+Replace top offers
+
+{
+  "topOffers": [
+    {
+      "title": "Summer Sale",
+      "description": "Up to 50% off on select styles",
+      "code": "SUMMER50"
+    },
+    {
+      "title": "Buy More, Save More",
+      "description": "Get 15% off when you buy 3 or more items",
+      "code": "BULK15"
+    }
+  ]
+}
+
+Add Advertisement
+
+{
+  "advertisements": [
+    {
+      "imageUrl": "https://example.com/images/ad1.jpg",
+      "link": "/collections/sale"
+    },
+    {
+      "imageUrl": "https://example.com/images/ad2.jpg",
+      "link": "/collections/new-arrivals"
+    }
+  ]
+}
+
+// update contact
+
+{
+  "contact": {
+    "heading": "Contact Us",
+    "email": "help@urbantheka.com",
+    "phone": "+91 11111 22222",
+    "address": "New Delhi, India",
+    "workingHours": "Mon-Sun 10AM - 9PM",
+    "socials": [
+      { "label": "Instagram", "url": "https://instagram.com/urbantheka" },
+      { "label": "Facebook", "url": "https://facebook.com/urbantheka" }
+    ]
+  }
+}
+
+// update navigation links
+
+{
+  "navigationLinks": [
+    { "label": "Home", "path": "/" },
+    { "label": "Collections", "path": "/collections" },
+    { "label": "About Us", "path": "/about-us" },
+    { "label": "Contact Us", "path": "/contact-us" },
+    { "label": "Sale", "path": "/sale" }
+  ]
+}
+
+
+// update legal links
+
+{
+  "legalLinks": [
+    { "label": "Privacy Policy", "path": "/info/privacy-policy" },
+    { "label": "Terms of Service", "path": "/info/terms-of-service" },
+    { "label": "Return Policy", "path": "/info/return-policy" },
+    { "label": "Shipping Policy", "path": "/info/shipping-policy" }
+  ]
+}
+
