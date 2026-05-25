@@ -1,6 +1,7 @@
 import { createClient } from 'redis';
+import 'dotenv/config'; // 🚀 Loads environment variables right before initializing the client
 
-const redisUrl = process.env.UPSTASH_REDIS_URL || 'redis://127.0.0.1:6379';
+const redisUrl = process.env.UPSTASH_REDIS_URL;
 
 const redisClient = createClient({
     url: redisUrl,

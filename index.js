@@ -1,5 +1,5 @@
+import 'dotenv/config';
 import express from "express";
-import dotenv from "dotenv";
 import cors from "cors";
 import connectDB from "./config/db.js";
 import { connectRedis, redisClient } from "./config/redis.js";
@@ -20,7 +20,6 @@ import { startCartSyncCron } from "./utils/cartSync.js";
 import startNamePropagation from "./tasks/namePropagation.js";
 import attributeRoutes from './routes/attributeRoutes.js'
 
-dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 5000;
