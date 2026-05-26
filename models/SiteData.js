@@ -31,6 +31,7 @@ const AdvertisementSchema = new mongoose.Schema(
     description: { type: String, trim: true, default: "" },
     imageUrl: { type: String, trim: true, default: "" },
     link: { type: String, trim: true, default: "" },
+    buttonText: { type: String, trim: true, default: "" },
     location: {
       type: String,
       trim: true,
@@ -47,6 +48,12 @@ const HeroSchema = new mongoose.Schema(
     subtitle: { type: String, trim: true, default: "" },
     ctaLabel: { type: String, trim: true, default: "" },
     ctaPath: { type: String, trim: true, default: "" },
+    location: {
+      type: String,
+      trim: true,
+      enum: ['all', 'home', 'collection', 'product', 'cart', 'checkout'],
+      default: 'home',
+    },
     imageDesktop: { type: String, trim: true, default: "" },
     imageMobile: { type: String, trim: true, default: "" },
   },

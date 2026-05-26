@@ -25,7 +25,7 @@ const app = express();
 const port = process.env.PORT || 5000;
 
 // Middlewares
-const allowedOrigins = [
+const defaultOrigins = [
   'http://localhost:5173', // Typically your Storefront
   'http://localhost:5174', // Typically your Storefront
   'http://localhost:3001',
@@ -37,6 +37,10 @@ const allowedOrigins = [
   'https://haryanaroyalty.netlify.app',
   'https://adminharyanaroyalty.netlify.app'
 ];
+
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map((origin) => origin.trim()).filter(Boolean)
+  : defaultOrigins;
 
 app.use(cors({
   origin: function (origin, callback) {

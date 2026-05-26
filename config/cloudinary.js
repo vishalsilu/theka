@@ -22,8 +22,19 @@ const storage = new CloudinaryStorage({
 
 export const deleteFromCloudinary = async (fileUrl) => {
     try {
-        const publicId = fileUrl.split('/').slice(-2).join('/').split('.')[0];
-        await cloudinary.uploader.destroy(publicId);
+        if (!fileUrl || typeof fileUrl !== 'string') return;
+
+        const urlWithoutQuery = fileUrl.split('?')[0];
+        const uploadIndex = urlWithoutQuery.lastIndexOf('/upload/');
+        let publicIdPath = uploadIndex >= 0
+            ? urlWithoutQuery.substring(uploadIndex + '/upload/'.length)
+            : urlWithoutQuery.substring(urlWithoutQuery.lastIndexOf('/') + 1);
+
+        publicIdPath = publicIdPath.replace(/^v\d+\//, '');
+        const publicId = publicIdPath.replace(/\.[^/.]+$/, '');
+        if (!publicId) return;
+
+        await cloudinary.uploader.destroy(publicId, { resource_type: 'image' });
     } catch (error) {
         console.error("Cloudinary Delete Error:", error);
     }
