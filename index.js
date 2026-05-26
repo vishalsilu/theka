@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express from "express";
 import cors from "cors";
 import connectDB from "./config/db.js";
-import {  redisClient } from "./config/redis.js";
+import { connectRedis, redisClient } from "./config/redis.js";
 import userRoutes from "./routes/userRoutes.js";
 import cartRoutes from "./routes/cartRoutes.js"
 import syncCart from "./tasks/syncCart.js"
@@ -101,7 +101,7 @@ const startServer = async () => {
         // 1. Connect to MongoDB
         await connectDB();
         
-
+await connectRedis();
         // 3. Start background tasks
         startCartSyncCron();
         startNamePropagation();

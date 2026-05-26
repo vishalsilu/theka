@@ -10,6 +10,9 @@ export const globalSearch = async (req, res) => {
         if (!q || q.length < 2) {
             return res.status(200).json({ products: [], categories: [], collections: [] });
         }
+        if (!q || typeof q !== 'string') {
+    return res.status(400).json({ error: "Search query 'q' is required" });
+}
 
         const searchTerm = q.toLowerCase().trim();
         const cacheKey = `search:global:unlimited:${searchTerm}`;
