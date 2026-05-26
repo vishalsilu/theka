@@ -1,0 +1,10 @@
+import mongoose from "mongoose";
+const uri = process.env.MONGO_URI;
+const collSchema = new mongoose.Schema({}, { strict: false, collection: 'collections' });
+const Coll = mongoose.model('Coll', collSchema);
+await mongoose.connect(uri, { dbName: 'theka' });
+const count = await Coll.countDocuments();
+console.log('collection count:', count);
+const docs = await Coll.find().limit(3).lean();
+console.log('sample:', JSON.stringify(docs, null, 2));
+await mongoose.disconnect();

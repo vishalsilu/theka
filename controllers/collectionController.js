@@ -56,17 +56,27 @@ export const getAllCollections = async (req, res) => {
 
         // 1. Check Redis Cache
         const cached = await redisClient.get(cacheKey);
-        if (cached) return res.status(200).json(JSON.parse(cached));
+        if (cached) {
+            try {
+                const parsed = JSON.parse(cached);
+                if (Array.isArray(parsed)) {
+                    return res.status(200).json({ success: true, collections: parsed });
+                }
+            } catch (err) {
+                console.warn('Invalid collections cache value, refreshing from DB:', err?.message || err);
+            }
+
+            // If the cache is invalid or not a proper array, drop it and refetch from DB
+            await redisClient.del(cacheKey);
+        }
 
         // 2. Fetch from DB (Populate categories for the megamenu)
         const collections = await Collection.find().populate('allCategories')
             .lean({ virtuals: true });
-            
 
         // 3. Save to Redis (Expire in 24 hours)
         await redisClient.setEx(cacheKey, 86400, JSON.stringify(collections));
-
-        res.status(200).json({collections : collections});
+        res.status(200).json({ success: true, collections });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

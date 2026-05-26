@@ -5,7 +5,10 @@ services:
       - "3000:3000"
     depends_on:
       - redis
+    environment:
+      - UPSTASH_REDIS_URL=${UPSTASH_REDIS_URL}
+
   redis:
     image: "redis:alpine"
     ports:
-      - "6379:6379"
+      - "6379:6379" # Exposes it so both your local machine and Docker can see it
