@@ -1,22 +1,14 @@
-import { createClient } from 'redis';
-import 'dotenv/config'; // 🚀 Loads environment variables right before initializing the client
+import { Redis } from '@upstash/redis';
+import 'dotenv/config'; 
 
-const redisUrl = process.env.UPSTASH_REDIS_URL;
-
-const redisClient = createClient({
-    url: redisUrl,
-});
-
-redisClient.on('error', (err) => console.error('❌ Redis Client Error:', err));
-
-const connectRedis = async () => {
-    try {
-        await redisClient.connect();
-        console.log(`✅ Redis Connected (${redisUrl.startsWith('redis://127.0.0.1') ? 'local' : 'Upstash'})`);
-    } catch (error) {
-        console.error('❌ Redis Connection Failed:', error);
-        throw error; // Let the main server handle the crash
-    }
+// Using a getter function ensures the env variable is read ONLY when called,
+// completely avoiding the dotenv hoisting race condition.
+const getRedisClient = () => {
+    return new Redis({
+        url: process.env.UPSTASH_REDIS_REST_URL, // Note: Upstash uses REST url for this SDK
+        token: process.env.UPSTASH_REDIS_REST_TOKEN,
+    });
 };
 
-export { redisClient, connectRedis };
+export const redisClient = getRedisClient();
+// No .connect() method is needed! It works instantly over HTTP.

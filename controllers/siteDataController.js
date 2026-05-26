@@ -34,9 +34,9 @@ const findOrCreateSiteData = async () => {
 const cacheSiteData = async (siteData) => {
   try {
     if (!redisClient.isOpen) return;
-    if (isEmptySiteData(siteData)) {
-      return;
-    }
+    // if (isEmptySiteData(siteData)) {
+    //   return;
+    // }
 
     await redisClient.set(SITE_DATA_CACHE_KEY, JSON.stringify(siteData), {
       EX: 3600,
