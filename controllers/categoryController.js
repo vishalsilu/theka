@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import Category from "../models/Category.js";
 import Collection from "../models/Collection.js"; // Import Collection to handle featured logic
 import Product from "../models/Product.js";
@@ -80,8 +81,21 @@ export const getAllCategories = async (req, res) => {
     try {
         const cacheKey = "categories:all";
         const cached = await redisClient.get(cacheKey);
-        
-        if (cached) return res.status(200).json(JSON.parse(cached));
+
+        if (cached) {
+            try {
+                const parsed = JSON.parse(cached);
+                if (Array.isArray(parsed)) {
+                    if (parsed.length > 0) {
+                        return res.status(200).json(parsed);
+                    }
+                    await redisClient.del(cacheKey);
+                }
+            } catch (err) {
+                console.warn('Invalid categories cache value, refreshing from DB:', err?.message || err);
+                await redisClient.del(cacheKey);
+            }
+        }
 
         const categories = await Category.find()
             .populate('parentCollection', 'name')
@@ -207,16 +221,42 @@ export const deleteCategory = async (req, res) => {
 };
 
 export const getCollectionCategory = async(req,res) => {
-    const {collectionId} = req.params
+    const {collectionId} = req.params;
     
-    if(!collectionId) res.status(400).json({error : "Collection is not Available"})
-           try {
+    if (!collectionId) return res.status(400).json({ error : "Collection is not Available" });
+
+    try {
+        let resolvedCollectionId = collectionId;
+        if (!mongoose.isValidObjectId(collectionId)) {
+            const collection = await Collection.findOne({
+                $or: [
+                    { path: collectionId },
+                    { name: new RegExp(`^${collectionId}$`, 'i') },
+                    { path: `/${collectionId}` }
+                ]
+            }).lean();
+            if (collection) resolvedCollectionId = collection._id;
+        }
+
         const cacheKey = `categories:${collectionId}`;
         const cached = await redisClient.get(cacheKey);
         
-        if (cached) return res.status(200).json(JSON.parse(cached));
+        if (cached) {
+            try {
+                const parsed = JSON.parse(cached);
+                if (Array.isArray(parsed)) {
+                    if (parsed.length > 0) {
+                        return res.status(200).json(parsed);
+                    }
+                    await redisClient.del(cacheKey);
+                }
+            } catch (err) {
+                console.warn('Invalid collection-category cache value, refreshing from DB:', err?.message || err);
+                await redisClient.del(cacheKey);
+            }
+        }
 
-        const categories = await Category.find({ parentCollection: collectionId })
+        const categories = await Category.find({ parentCollection: resolvedCollectionId })
             .populate('parentCollection', 'name')
             .lean();
         

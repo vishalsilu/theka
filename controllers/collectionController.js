@@ -60,14 +60,16 @@ export const getAllCollections = async (req, res) => {
             try {
                 const parsed = JSON.parse(cached);
                 if (Array.isArray(parsed)) {
-                    return res.status(200).json({ success: true, collections: parsed });
+                    if (parsed.length > 0) {
+                        return res.status(200).json({ success: true, collections: parsed });
+                    }
+                    // Empty array cache may be stale if the DB now contains collections.
+                    await redisClient.del(cacheKey);
                 }
             } catch (err) {
                 console.warn('Invalid collections cache value, refreshing from DB:', err?.message || err);
+                await redisClient.del(cacheKey);
             }
-
-            // If the cache is invalid or not a proper array, drop it and refetch from DB
-            await redisClient.del(cacheKey);
         }
 
         // 2. Fetch from DB (Populate categories for the megamenu)
@@ -240,11 +242,19 @@ export const getFeaturedCollection = async (req, res) => {
     try {
         // 1. Try to get data from Redis
         const cachedData = await redisClient.get(cacheKey);
-        
         if (cachedData) {
-            return res.status(200).json({
-                data: cachedData ? JSON.parse(cachedData) : null,
-            });
+            try {
+                const parsed = JSON.parse(cachedData);
+                if (Array.isArray(parsed)) {
+                    if (parsed.length > 0) {
+                        return res.status(200).json({ data: parsed });
+                    }
+                    await redisClient.del(cacheKey);
+                }
+            } catch (err) {
+                console.warn('Invalid featured collections cache value, refreshing from DB:', err?.message || err);
+                await redisClient.del(cacheKey);
+            }
         }
 
         // 2. If not in Redis, get from MongoDB
