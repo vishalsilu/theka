@@ -7,11 +7,16 @@ if (!redisUrl) {
     throw new Error("❌ Environment variable UPSTASH_REDIS_URL is missing!");
 }
 
-// 2. Initialize the client configuration
+// Check if we are connecting to Upstash Cloud (uses secure 'rediss://') 
+// versus local Docker/Dev Redis (uses unencrypted 'redis://')
+const isUpstash = redisUrl.startsWith('rediss://');
+
+// 2. Initialize the client configuration dynamically
 const redisClient = createClient({
     url: redisUrl,
     socket: {
-        tls: true,         // Required for Upstash cloud instances (rediss://)
+        // Enforce TLS/SSL ONLY for Upstash Cloud. Local Redis will crash if this is true.
+        tls: isUpstash,         
         keepAlive: 5000,   // Keeps the TCP connection alive under serverless strain
         reconnectStrategy: (retries) => {
             // Smoothly back off connection retries so you don't flood the server
@@ -23,8 +28,8 @@ const redisClient = createClient({
 
 // 3. Error monitoring (prevents uncaught exception crashes)
 redisClient.on('error', (err) => console.error('❌ Redis Client Error:', err));
-redisClient.on('connect', () => console.log('🔄 Attempting to establish Redis connection...'));
-redisClient.on('ready', () => console.log('✅ Redis Client Ready and Connected!'));
+redisClient.on('connect', () => console.log(`🔄 Attempting to connect to Redis (${isUpstash ? 'Upstash Cloud' : 'Local Docker'})...`));
+redisClient.on('ready', () => console.log(`✅ Redis Client Ready and Connected to ${isUpstash ? 'Upstash Cloud' : 'Local Redis'}!`));
 
 // 4. Safe connection wrapper
 const connectRedis = async () => {

@@ -673,10 +673,21 @@ export const updateProduct = async (req, res) => {
         
         if (!product) return res.status(404).json({ message: "Product not found" });
 
-        // Parse JSON strings
-        const fieldsToParse = ['variants', 'discount', 'collectionInfo', 'categoryInfo'];
+        // Parse JSON strings, including timeline data from multipart form payloads
+        const fieldsToParse = ['variants', 'discount', 'collectionInfo', 'categoryInfo', 'timeline'];
         fieldsToParse.forEach(field => {
-            if (typeof updateData[field] === 'string') updateData[field] = JSON.parse(updateData[field]);
+            if (typeof updateData[field] === 'string') {
+                const value = updateData[field].trim();
+                if (value === '' || value === 'undefined' || value === 'null') {
+                    updateData[field] = field === 'variants' ? [] : null;
+                } else {
+                    try {
+                        updateData[field] = JSON.parse(value);
+                    } catch (parseErr) {
+                        throw new Error(`Invalid JSON structure inside field "${field}": ${parseErr.message}`);
+                    }
+                }
+            }
         });
 
         const { byToken: uploadedByToken, byVariantIndex: uploadedByVariantIndex } = buildUploadMappings(req);

@@ -5,10 +5,12 @@ import upload from "../config/cloudinary.js";
 import {
   cancelOrder,
   createOrder,
+  createAdjustmentAdmin,
   deleteOrderAdmin,
   getAllOrdersAdmin,
   getMyOrders,
   getOrderById,
+  reverseAdjustmentAdmin,
   submitOrderReviews,
   updateOrderAdmin,
   updateOrderStatusAdmin,
@@ -20,12 +22,14 @@ const router = express.Router();
 router.post("/", protect, createOrder);
 router.get("/my", protect, getMyOrders);
 
-router.get("/admin/all", getAllOrdersAdmin);
-router.get("/admin/:orderId", getOrderById);
-router.patch("/admin/:orderId", updateOrderAdmin);
-router.patch("/admin/:orderId/status", updateOrderStatusAdmin);
-router.post("/admin/:orderId/refund", issueRefundAdmin);
-router.delete("/admin/:orderId", deleteOrderAdmin);
+router.get("/admin/all", protect, adminOnly, getAllOrdersAdmin);
+router.get("/admin/:orderId", protect, adminOnly, getOrderById);
+router.patch("/admin/:orderId", protect, adminOnly, updateOrderAdmin);
+router.patch("/admin/:orderId/status", protect, adminOnly, updateOrderStatusAdmin);
+router.post("/admin/:orderId/refund", protect, adminOnly, issueRefundAdmin);
+router.post('/admin/:orderId/adjustments', protect, adminOnly, createAdjustmentAdmin);
+router.post('/admin/:orderId/adjustments/:adjId/reverse', protect, adminOnly, reverseAdjustmentAdmin);
+router.delete("/admin/:orderId", protect, adminOnly, deleteOrderAdmin);
 
 router.get("/:orderId", getOrderById);
 

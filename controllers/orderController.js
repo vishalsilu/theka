@@ -623,3 +623,98 @@ export const issueRefundAdmin = async (req, res) => {
     return res.status(500).json({ error: error.message });
   }
 };
+
+// --- CREATE ADMIN ADJUSTMENT ON ORDER ---
+export const createAdjustmentAdmin = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { type, amount, items, note } = req.body;
+    if (typeof amount !== 'number' && typeof amount !== 'string') return res.status(400).json({ error: 'Amount is required' });
+    const amt = Number(amount);
+    if (Number.isNaN(amt)) return res.status(400).json({ error: 'Invalid amount' });
+
+    const order = await Order.findOne({ orderId });
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (req.user?.role !== 'Admin') return res.status(403).json({ error: 'Forbidden' });
+
+    const adjType = String(type || 'price');
+    if (adjType === 'refund') {
+      if (!note || String(note).trim().length < 5) return res.status(400).json({ error: 'Refunds require a note explaining reason' });
+      if (amt >= 0) return res.status(400).json({ error: 'Refund amount must be negative' });
+    }
+
+    const adj = {
+      id: `ADJ-${Date.now()}`,
+      type: adjType,
+      amount: amt,
+      items: Array.isArray(items) ? items.map(i => ({ productId: String(i.productId || ''), quantity: Number(i.quantity || 0), priceDelta: Number(i.priceDelta || 0) })) : [],
+      note: String(note || ''),
+      createdBy: `${req.user?.firstName || ''} ${req.user?.lastName || ''}`.trim() || req.user?.id || 'admin',
+      createdById: req.user?.id || null,
+      createdAt: new Date().toISOString(),
+      reversed: false
+    };
+
+    order.adjustments = order.adjustments || [];
+    order.adjustments.push(adj);
+    order.total = Number(order.total || 0) + amt;
+    if (adj.type === 'price') {
+      order.subtotal = Number(order.subtotal || 0) + amt;
+    }
+
+    await order.save();
+
+    await redisClient.del(`order:detail:${orderId}`);
+    await redisClient.del(`orders:user:${order.userId}`);
+
+    return res.status(200).json({ success: true, order });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+// --- REVERSE AN EXISTING ADJUSTMENT ---
+export const reverseAdjustmentAdmin = async (req, res) => {
+  try {
+    const { orderId, adjId } = req.params;
+    const order = await Order.findOne({ orderId });
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (req.user?.role !== 'Admin') return res.status(403).json({ error: 'Forbidden' });
+
+    const existing = (order.adjustments || []).find(a => a.id === adjId);
+    if (!existing) return res.status(404).json({ error: 'Adjustment not found' });
+    if (existing.reversed) return res.status(400).json({ error: 'Adjustment already reversed' });
+
+    const reversal = {
+      id: `ADJ-REV-${Date.now()}`,
+      type: `reversal`,
+      amount: -Number(existing.amount || 0),
+      items: existing.items || [],
+      note: `Reversal of ${existing.id} - ${existing.note || ''}`,
+      createdBy: `${req.user?.firstName || ''} ${req.user?.lastName || ''}`.trim() || req.user?.id || 'admin',
+      createdById: req.user?.id || null,
+      createdAt: new Date().toISOString(),
+      reversed: false
+    };
+
+    order.adjustments.push(reversal);
+    existing.reversed = true;
+    existing.reversedAt = new Date().toISOString();
+    existing.reversedBy = `${req.user?.firstName || ''} ${req.user?.lastName || ''}`.trim() || req.user?.id || 'admin';
+    existing.reversalId = reversal.id;
+
+    order.total = Number(order.total || 0) + reversal.amount;
+    if (existing.type === 'price') {
+      order.subtotal = Number(order.subtotal || 0) + reversal.amount;
+    }
+
+    await order.save();
+
+    await redisClient.del(`order:detail:${orderId}`);
+    await redisClient.del(`orders:user:${order.userId}`);
+
+    return res.status(200).json({ success: true, order });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+};

@@ -57,7 +57,8 @@ const trackingSchema = new mongoose.Schema(
   {
     status: { type: String, required: true },
     date: { type: String, required: true },
-    location: { type: String }
+    location: { type: String },
+    note: { type: String }
   },
   { _id: false }
 );
@@ -89,8 +90,21 @@ const orderSchema = new mongoose.Schema(
     },
     trackingId: { type: String },
     shippingAddress: { type: addressSchema, required: true },
-    tracking: { type: [trackingSchema], default: [] }
-    ,
+    tracking: { type: [trackingSchema], default: [] },
+    adjustments: [{
+      id: { type: String },
+      type: { type: String, enum: ['price', 'item', 'credit', 'refund', 'reversal'], default: 'price' },
+      amount: { type: Number, required: true },
+      items: [{ productId: String, quantity: Number, priceDelta: Number }],
+      note: { type: String },
+      createdBy: { type: String },
+      createdById: { type: String },
+      createdAt: { type: String },
+      reversed: { type: Boolean, default: false },
+      reversedAt: { type: String },
+      reversedBy: { type: String },
+      reversalId: { type: String }
+    }],
     refunds: [{
       id: { type: String },
       amount: { type: Number },
