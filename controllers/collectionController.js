@@ -278,13 +278,19 @@ export const getFeaturedCollection = async (req, res) => {
 
         // 2. If not in Redis, get from MongoDB
         console.log('[getFeaturedCollection] Querying MongoDB...');
-        const featured = await Collection.find({ "featured.isFeatured": true })
-            .populate("featured.featuredCategory", "name");
+        const featured = await Collection.find({ "featured.isFeatured": true }).lean();
         console.log('[getFeaturedCollection] DB returned', featured.length, 'featured collections');
 
-        // 3. Save result to Redis for next time (expire in 1 hour)
+        // 3. Save result to Redis ONLY if non-empty (expire in 1 hour)
         console.log('[getFeaturedCollection] Caching result...');
-        await redisClient.setEx(cacheKey, 3600, JSON.stringify(featured));
+        if (featured.length > 0) {
+            try {
+                await redisClient.setEx(cacheKey, 3600, JSON.stringify(featured));
+            } catch (err) {
+                console.warn('[getFeaturedCollection] Redis cache write failed:', err?.message);
+                // Continue anyway, still return data to user
+            }
+        }
         console.log('[getFeaturedCollection] Response sent:', featured.length, 'collections');
 
         res.status(200).json({ success: true, source: "database", data: featured });

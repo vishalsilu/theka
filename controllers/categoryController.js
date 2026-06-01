@@ -272,7 +272,14 @@ export const getCollectionCategory = async(req,res) => {
             .populate('parentCollection', 'name')
             .lean();
         
-        await redisClient.setEx(cacheKey, 86400, JSON.stringify(categories));
+        // Only cache non-empty results
+        if (categories.length > 0) {
+            try {
+                await redisClient.setEx(cacheKey, 86400, JSON.stringify(categories));
+            } catch (err) {
+                console.warn('[getCollectionCategory] Redis cache write failed:', err?.message);
+            }
+        }
         res.status(200).json(categories);
     } catch (error) {
         res.status(500).json({ error: error.message });
