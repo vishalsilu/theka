@@ -310,7 +310,20 @@ export const getProductsByCollection = async (req, res) => {
         const cacheKey = `collectionProducts:${type.toLowerCase()}:lite`;
 
         const cached = await redisClient.get(cacheKey);
-        if (cached) return res.status(200).json(JSON.parse(cached));
+        if (cached) {
+            try {
+                const parsed = JSON.parse(cached);
+                if (Array.isArray(parsed)) {
+                    if (parsed.length > 0) {
+                        return res.status(200).json(parsed);
+                    }
+                    await redisClient.del(cacheKey);
+                }
+            } catch (err) {
+                console.warn('Invalid products-by-collection cache value, refreshing from DB:', err?.message || err);
+                await redisClient.del(cacheKey);
+            }
+        }
 
         const productsRaw = await Product.find(
             { "collectionInfo.name": { $regex: new RegExp(`^${type}$`, 'i') } },
@@ -387,8 +400,20 @@ export const getProductsByCategory = async (req, res) => {
         const cacheKey = `products:${type.toLowerCase()}:${category.toLowerCase()}:lite`;
 
         const cached = await redisClient.get(cacheKey);
-
-        if (cached) return res.status(200).json(JSON.parse(cached));
+        if (cached) {
+            try {
+                const parsed = JSON.parse(cached);
+                if (Array.isArray(parsed)) {
+                    if (parsed.length > 0) {
+                        return res.status(200).json(parsed);
+                    }
+                    await redisClient.del(cacheKey);
+                }
+            } catch (err) {
+                console.warn('Invalid products-by-category cache value, refreshing from DB:', err?.message || err);
+                await redisClient.del(cacheKey);
+            }
+        }
 
         const productsRaw = await Product.find(
             {
