@@ -80,30 +80,42 @@ export const createCategory = async (req, res) => {
 export const getAllCategories = async (req, res) => {
     try {
         const cacheKey = "categories:all";
+        console.log('[getAllCategories] Starting...');
+        
         const cached = await redisClient.get(cacheKey);
+        console.log('[getAllCategories] Cache check:', cached ? 'HIT (length: ' + (cached?.length || 0) + ')' : 'MISS');
 
         if (cached) {
             try {
                 const parsed = JSON.parse(cached);
+                console.log('[getAllCategories] Parsed cache:', Array.isArray(parsed) ? `array[${parsed.length}]` : typeof parsed);
+                
                 if (Array.isArray(parsed)) {
                     if (parsed.length > 0) {
+                        console.log('[getAllCategories] Returning non-empty cache');
                         return res.status(200).json(parsed);
                     }
+                    console.log('[getAllCategories] Cache is empty array, deleting stale cache');
                     await redisClient.del(cacheKey);
                 }
             } catch (err) {
-                console.warn('Invalid categories cache value, refreshing from DB:', err?.message || err);
+                console.warn('[getAllCategories] Invalid cache, refreshing from DB:', err?.message || err);
                 await redisClient.del(cacheKey);
             }
         }
 
+        console.log('[getAllCategories] Querying MongoDB...');
         const categories = await Category.find()
             .populate('parentCollection', 'name')
             .lean();
+        console.log('[getAllCategories] DB returned', categories.length, 'categories');
         
+        console.log('[getAllCategories] Caching result...');
         await redisClient.setEx(cacheKey, 86400, JSON.stringify(categories));
+        console.log('[getAllCategories] Response sent:', categories.length, 'categories');
         res.status(200).json(categories);
     } catch (error) {
+        console.error('[getAllCategories] ERROR:', error);
         res.status(500).json({ error: error.message });
     }
 };
