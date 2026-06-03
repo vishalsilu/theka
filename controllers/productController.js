@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import Product from "../models/Product.js";
 import Category from "../models/Category.js";
 import Collection from "../models/Collection.js";
@@ -493,7 +494,19 @@ export const removeReview = async (req, res) => {
     if (!userId) return res.status(401).json({ error: "Not authorized" });
     if (!productId || !id) return res.status(400).json({ error: "Missing required fields" });
 
-    // 2. Clear the review from the Product collection array
+    // 2. Load the review and its images before deletion
+    const productDoc = await Product.findOne({ id: productId }).lean();
+    if (!productDoc) {
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    const reviewToDelete = productDoc.reviews?.find((review) => String(review._id) === String(id) && String(review.userId) === String(userId));
+    if (!reviewToDelete) {
+      return res.status(404).json({ error: "Review not found or not authorized to delete" });
+    }
+
+    const reviewImages = Array.isArray(reviewToDelete.images) ? reviewToDelete.images : [];
+
     const productUpdate = await Product.findOneAndUpdate(
       { id: productId }, 
       { 
@@ -510,6 +523,8 @@ export const removeReview = async (req, res) => {
     if (!productUpdate) {
       return res.status(404).json({ error: "Product not found or review already removed" });
     }
+
+    await Promise.allSettled(reviewImages.map(deleteFromCloudinary));
 
     // 3. Reset the checked review state flag on the companion Order
     if (orderId) {
@@ -588,6 +603,7 @@ export const removeReviewAdmin = async (req, res) => {
     const customProductId = targetProduct.id; // Custom numeric String ID fallback if used
     const reviewData = targetProduct.reviews.find(r => String(r._id) === String(id));
     const userId = reviewData?.userId;
+    const reviewImages = Array.isArray(reviewData?.images) ? reviewData.images : [];
 
     // 2. Perform the atomic pull to eliminate the review
     const productUpdate = await Product.findByIdAndUpdate(
@@ -595,6 +611,10 @@ export const removeReviewAdmin = async (req, res) => {
       { $pull: { reviews: { _id: id } } },
       { new: true }
     ).lean();
+
+    if (reviewImages.length) {
+      await Promise.allSettled(reviewImages.map(deleteFromCloudinary));
+    }
 
     // 3. Find the companion Order and reset the flag (since we didn't have orderId)
     let derivedOrderId = null;
@@ -658,6 +678,160 @@ export const removeReviewAdmin = async (req, res) => {
     return res.status(500).json({ error: error.message });
   }
 };
+
+export const addProductReview = async (req, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ error: "Login required to submit a review." });
+    }
+
+    const { id } = req.params;
+    const query = [{ id }];
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      query.push({ _id: id });
+    }
+    const product = await Product.findOne({ $or: query });
+    if (!product) return res.status(404).json({ error: "Product not found" });
+
+    const rating = Number(req.body.rating || req.body.rate || 0);
+    const title = String(req.body.title || '').trim();
+    const comment = String(req.body.comment || '').trim();
+    const variant = String(req.body.variant || '').trim();
+
+    if (!rating || rating < 1 || rating > 5) {
+      return res.status(400).json({ error: "Rating must be between 1 and 5." });
+    }
+    if (!comment) {
+      return res.status(400).json({ error: "Review comment is required." });
+    }
+
+    const uploadedImages = (req.files || []).map(getFileUrl).filter(Boolean);
+
+    const review = {
+      user: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || req.user.email || 'Anonymous',
+      userId: req.user.id,
+      orderId: null,
+      productId: product.id || String(product._id),
+      variant,
+      title,
+      comment,
+      images: uploadedImages,
+      rating,
+      date: new Date().toISOString().split('T')[0]
+    };
+
+    product.reviews = product.reviews || [];
+    product.reviews.push(review);
+    await product.save();
+
+    const savedReview = product.reviews[product.reviews.length - 1];
+
+    await safeRedisDel(`product:detail:${product.id}`, `product:detail:${product._id}`);
+    await invalidateProductCache({
+      collectionId: product.collectionInfo?.id,
+      categoryId: product.categoryInfo?.id,
+      collectionName: product.collectionInfo?.name,
+      categoryName: product.categoryInfo?.name
+    });
+
+    return res.status(201).json({ success: true, review: savedReview });
+  } catch (error) {
+    console.error('Add Product Review Failure:', error);
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+export const updateProductReview = async (req, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ error: "Login required to update a review." });
+    }
+
+    const { id, reviewId } = req.params;
+    const query = [{ id }];
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      query.push({ _id: id });
+    }
+
+    const product = await Product.findOne({ $or: query });
+    if (!product) return res.status(404).json({ error: "Product not found" });
+
+    const review = product.reviews?.find((rev) => String(rev._id) === String(reviewId));
+    if (!review) {
+      return res.status(404).json({ error: "Review not found" });
+    }
+
+    if (String(review.userId) !== String(req.user.id) && req.user.role !== 'Admin') {
+      return res.status(403).json({ error: "Not authorized to update this review." });
+    }
+
+    const rating = Number(req.body.rating || req.body.rate || review.rating || 0);
+    const title = String(req.body.title || review.title || '').trim();
+    const comment = String(req.body.comment || review.comment || '').trim();
+    const variant = String(req.body.variant || review.variant || '').trim();
+        // Handle removed images (sent as JSON string or comma-separated list)
+        let removedImages = [];
+        if (req.body.removedImages) {
+            try {
+                if (typeof req.body.removedImages === 'string') {
+                    removedImages = JSON.parse(req.body.removedImages);
+                } else {
+                    removedImages = req.body.removedImages;
+                }
+            } catch (err) {
+                // fallback to comma-separated
+                removedImages = String(req.body.removedImages).split(',').map(s => s.trim()).filter(Boolean);
+            }
+        }
+
+        // New uploaded files to add to the review
+        const uploadedImages = (req.files || []).map(getFileUrl).filter(Boolean);
+    if (!rating || rating < 1 || rating > 5) {
+      return res.status(400).json({ error: "Rating must be between 1 and 5." });
+    }
+    if (!comment) {
+      return res.status(400).json({ error: "Review comment is required." });
+    }
+
+        review.title = title;
+        review.comment = comment;
+        review.rating = rating;
+        review.variant = variant;
+
+        // Remove any images the user asked to remove (and delete from Cloudinary)
+        if (Array.isArray(removedImages) && removedImages.length) {
+            try {
+                await Promise.allSettled(removedImages.map(deleteFromCloudinary));
+            } catch (err) {
+                console.warn('Failed to delete some images from Cloudinary during review update:', err?.message || err);
+            }
+            review.images = Array.isArray(review.images) ? review.images.filter(img => !removedImages.includes(img)) : [];
+        }
+
+        // Append newly uploaded images (if any), keep unique and cap at 5
+        if (uploadedImages.length) {
+            const before = Array.isArray(review.images) ? review.images : [];
+            const merged = [...before, ...uploadedImages].filter(Boolean);
+            // remove duplicates while preserving order
+            review.images = Array.from(new Set(merged)).slice(0, 5);
+        }
+
+    await product.save();
+
+    await safeRedisDel(`product:detail:${product.id}`, `product:detail:${product._id}`);
+    await invalidateProductCache({
+      collectionId: product.collectionInfo?.id,
+      categoryId: product.categoryInfo?.id,
+      collectionName: product.collectionInfo?.name,
+      categoryName: product.categoryInfo?.name
+    });
+
+    return res.status(200).json({ success: true, review });
+  } catch (error) {
+    console.error('Update Product Review Failure:', error);
+    return res.status(500).json({ error: error.message });
+  }
+};
 // --- GET SPECIFIC PRODUCT (FULL FETCH) ---
 export const getSpecificProduct = async (req, res) => {
     try {
@@ -667,7 +841,12 @@ export const getSpecificProduct = async (req, res) => {
         const cachedProduct = await redisClient.get(cacheKey);
         if (cachedProduct) return res.status(200).json({ success: true, data: JSON.parse(cachedProduct) });
 
-        const product = await Product.findOne({ id: id })
+        const query = [{ id }];
+        if (mongoose.Types.ObjectId.isValid(id)) {
+            query.push({ _id: id });
+        }
+
+        const product = await Product.findOne({ $or: query })
             .populate('categoryInfo.id')
             .populate('collectionInfo.id');
 

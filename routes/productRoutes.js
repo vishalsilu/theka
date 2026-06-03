@@ -8,6 +8,8 @@ import {
     deleteProduct,
     getSpecificProduct,
     getProductsByCollection,
+    addProductReview,
+    updateProductReview,
     removeReview,
     removeReviewAdmin,
     getAllProducts
@@ -22,10 +24,12 @@ router.get("/featured", getFeaturedProducts);
 router.get("/type/:type", getProductsByCollection);
 router.get("/:type/:category", getProductsByCategory);
 router.put("/:id", upload.array("images", 12), updateProduct);
+router.post("/:id/reviews", protect, upload.array("images", 5), addProductReview);
+router.patch("/:id/reviews/:reviewId", protect, upload.array("images", 5), updateProductReview);
 router.get("/:id", getSpecificProduct);
 router.delete("/:id", deleteProduct);
-router.delete("/reviews/remove",protect, removeReview);
-router.delete('/admin/reviews/remove', protect,adminOnly, removeReviewAdmin);
+router.delete("/reviews/remove", protect, removeReview);
+router.delete('/admin/reviews/remove', protect, adminOnly, removeReviewAdmin);
 
 
 //Admin Routes

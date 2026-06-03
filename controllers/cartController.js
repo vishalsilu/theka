@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { redisClient } from '../config/redis.js';
 import Product from "../models/Product.js"
 import User from "../models/Users.js";
+import { debounceCartSync } from "../utils/cartDebouncer.js";
 
 const CART_PREFIX_USER = 'cart:user:';
 const CART_PREFIX_GUEST = 'cart:guest:';
@@ -192,12 +193,13 @@ export const putCart = async (req, res) => {
         
         const finalItems = sanitizeThinCart(req.body?.items);
         console.log(finalItems);
-        // I am getting varientId in this finalItems
         
-          
         if (userId) {
+            // 1. Save to Redis instantly (keeps app responsive)
             await saveUserCart(userId, finalItems);
-            // i got varient id in this also
+            
+            // 2. Trigger real-time debounce check
+            debounceCartSync(userId); 
 
             if (cartToken && TOKEN_REGEX.test(cartToken)) {
                 await saveGuestCart(cartToken, finalItems);

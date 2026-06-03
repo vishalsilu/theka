@@ -48,3 +48,35 @@ export const protect = async (req, res, next) => {
         return res.status(401).json({ alert: "Not authorized, no token" });
     }
 };
+
+export const optionalProtect = async (req, res, next) => {
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+        try {
+            const token = req.headers.authorization.split(' ')[1];
+            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+            const cachedUser = await redisClient.get(`user:id:${decoded.id}`);
+            if (cachedUser) {
+                req.user = JSON.parse(cachedUser);
+                return next();
+            }
+
+            const user = await User.findOne({ id: decoded.id }).select('-password');
+            if (!user) return next();
+
+            await redisClient.setEx(
+                `user:id:${user.id}`,
+                3600,
+                JSON.stringify(user)
+            );
+
+            req.user = user;
+            return next();
+        } catch (error) {
+            console.error('Optional auth failed:', error.message);
+            return next();
+        }
+    }
+
+    next();
+};
