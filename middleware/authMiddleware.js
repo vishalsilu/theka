@@ -44,6 +44,28 @@ export const protect = async (req, res, next) => {
             console.error("Token Verification Error:", error);
             return res.status(401).json({ alert: "Not authorized, token failed" });
         }
+    } else if (req.cookies && req.cookies.token) {
+        // Support cookie-based JWT (httpOnly cookie)
+        try {
+            token = req.cookies.token;
+            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+            const cachedUser = await redisClient.get(`user:id:${decoded.id}`);
+            if (cachedUser) {
+                req.user = JSON.parse(cachedUser);
+                return next();
+            }
+
+            const user = await User.findOne({ id: decoded.id }).select('-password');
+            if (!user) return res.status(401).json({ alert: "User no longer exists" });
+
+            await redisClient.setEx(`user:id:${user.id}`, 3600, JSON.stringify(user));
+            req.user = user;
+            return next();
+        } catch (error) {
+            console.error('Cookie token verification failed:', error?.message || error);
+            return res.status(401).json({ alert: 'Not authorized, token failed' });
+        }
     } else {
         return res.status(401).json({ alert: "Not authorized, no token" });
     }

@@ -103,6 +103,15 @@ export const registerUser = async (req, res) => {
             }
         }
 
+        // Set httpOnly cookie for browser-based clients (Admin panel)
+        const isProd = process.env.NODE_ENV === 'production';
+        res.cookie('token', token, {
+            httpOnly: true,
+            secure: isProd,
+            sameSite: 'lax',
+            maxAge: 30 * 24 * 60 * 60 * 1000
+        });
+
         return res.status(201).json({ success: "Registered", user: userData, token });
     } catch (error) {
         return res.status(500).json({ error: "Internal Server Error" });
@@ -164,6 +173,15 @@ export const loginUser = async (req, res) => {
             redisClient.setEx(`user:email:${user.email}`, TTL, jsonUser),
             redisClient.setEx(`user:phone:${user.phone}`, TTL, jsonUser)
         ]);
+
+        // Set httpOnly cookie for browser-based clients (Admin panel)
+        const isProd = process.env.NODE_ENV === 'production';
+        res.cookie('token', token, {
+            httpOnly: true,
+            secure: isProd,
+            sameSite: 'lax',
+            maxAge: 30 * 24 * 60 * 60 * 1000
+        });
 
         return res.json({ success: "Login Successful", user: userData, token });
     } catch (error) {
@@ -525,5 +543,14 @@ export const getMe = async (req, res) => {
         }
     } catch (error) {
         res.status(500).json({ message: error.message });
+    }
+};
+
+export const logoutUser = async (req, res) => {
+    try {
+        res.clearCookie('token');
+        return res.status(200).json({ success: true, message: 'Logged out' });
+    } catch (error) {
+        return res.status(500).json({ error: 'Failed to logout' });
     }
 };

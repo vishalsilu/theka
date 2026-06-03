@@ -1,15 +1,17 @@
 import express from 'express';
 import { getAttributes, createAttribute, updateAttribute, deleteAttribute } from '../controllers/attributeController.js';
+import { protect } from '../middleware/authMiddleware.js';
+import { adminOnly } from '../middleware/adminMiddleware.js';
 
 const router = express.Router();
 
 // GET /attributes/:key
 router.get('/:key', getAttributes);
-// POST /attributes/:key
-router.post('/:key', createAttribute);
-// PUT /attributes/:key/:id
-router.put('/:key/:id', updateAttribute);
-// DELETE /attributes/:key/:id
-router.delete('/:key/:id', deleteAttribute);
+// POST /attributes/:key (admin)
+router.post('/:key', protect, adminOnly, createAttribute);
+// PUT /attributes/:key/:id (admin)
+router.put('/:key/:id', protect, adminOnly, updateAttribute);
+// DELETE /attributes/:key/:id (admin)
+router.delete('/:key/:id', protect, adminOnly, deleteAttribute);
 
 export default router;

@@ -1,5 +1,7 @@
 import upload from "../middleware/upload.middleware.js";
 import express from "express";
+import { protect } from "../middleware/authMiddleware.js";
+import { adminOnly } from "../middleware/adminMiddleware.js";
 import {
     createCategory,
     getAllCategories,
@@ -11,7 +13,7 @@ import {
 
 const router = express.Router();
 
-router.post("/", upload.single('image'), createCategory);
+router.post("/", protect, adminOnly, upload.single('image'), createCategory);
 router.get("/weartype/:collectionName/:categoryName", getDynamicFiltersByName);
 router.get("/:collectionId", getCollectionCategory);
 
@@ -19,8 +21,8 @@ router.get("/", getAllCategories);
 
 
 
-router.put("/:id", upload.single('image'),updateCategory);
+router.put("/:id", protect, adminOnly, upload.single('image'), updateCategory);
 
-router.delete("/:id", deleteCategory);
+router.delete("/:id", protect, adminOnly, deleteCategory);
 
 export default router;

@@ -14,11 +14,11 @@ const router = express.Router();
 
 router.get("/validate", protect, validateCoupon);
 
-router.post("/admin",  createCoupon);
-router.get("/admin",  getCouponsAdmin);
-router.get("/admin/:id",  getCouponByIdAdmin);
-router.patch("/admin/:id",  updateCouponAdmin);
-router.delete("/admin/:id",  deleteCouponAdmin);
+router.post("/admin",protect,adminOnly,  createCoupon);
+router.get("/admin", protect, adminOnly, getCouponsAdmin);
+router.get("/admin/:id", protect, adminOnly, getCouponByIdAdmin);
+router.patch("/admin/:id", protect, adminOnly, updateCouponAdmin);
+router.delete("/admin/:id", protect, adminOnly, deleteCouponAdmin);
 
 export default router;
 

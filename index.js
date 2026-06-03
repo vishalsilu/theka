@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from "express";
 import cors from "cors";
+import cookieParser from 'cookie-parser';
 import connectDB from "./config/db.js";
 import { connectRedis, redisClient } from "./config/redis.js";
 import userRoutes from "./routes/userRoutes.js";
@@ -53,6 +54,8 @@ app.use(cors({
   credentials: true
 }));
 app.use(express.json());
+// Parse cookies for cookie-based auth
+app.use(cookieParser());
 
 // Routes
 app.use('/api/users', userRoutes);
