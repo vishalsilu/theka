@@ -53,45 +53,33 @@ export const createCollection = async (req, res) => {
 export const getAllCollections = async (req, res) => {
     try {
         const cacheKey = "collections:all";
-        console.log('[getAllCollections] Starting...');
 
         // 1. Check Redis Cache
         const cached = await redisClient.get(cacheKey);
-        console.log('[getAllCollections] Cache check:', cached ? 'HIT (length: ' + (cached?.length || 0) + ')' : 'MISS');
-        
         if (cached) {
             try {
                 const parsed = JSON.parse(cached);
-                console.log('[getAllCollections] Parsed cache:', Array.isArray(parsed) ? `array[${parsed.length}]` : typeof parsed);
-                
                 if (Array.isArray(parsed)) {
                     if (parsed.length > 0) {
-                        console.log('[getAllCollections] Returning non-empty cache');
                         return res.status(200).json({ success: true, collections: parsed });
                     }
                     // Empty array cache may be stale if the DB now contains collections.
-                    console.log('[getAllCollections] Cache is empty array, deleting stale cache');
                     await redisClient.del(cacheKey);
                 }
             } catch (err) {
-                console.warn('[getAllCollections] Invalid cache, refreshing from DB:', err?.message || err);
+                console.warn('Invalid collections cache value, refreshing from DB:', err?.message || err);
                 await redisClient.del(cacheKey);
             }
         }
 
         // 2. Fetch from DB (Populate categories for the megamenu)
-        console.log('[getAllCollections] Querying MongoDB...');
         const collections = await Collection.find().populate('allCategories')
             .lean({ virtuals: true });
-        console.log('[getAllCollections] DB returned', collections.length, 'collections');
 
         // 3. Save to Redis (Expire in 24 hours)
-        console.log('[getAllCollections] Caching result...');
         await redisClient.setEx(cacheKey, 86400, JSON.stringify(collections));
-        console.log('[getAllCollections] Response sent:', collections.length, 'collections');
         res.status(200).json({ success: true, collections });
     } catch (error) {
-        console.error('[getAllCollections] ERROR:', error);
         res.status(500).json({ error: error.message });
     }
 };
@@ -250,52 +238,34 @@ export const deleteCollection = async (req, res) => {
 
 export const getFeaturedCollection = async (req, res) => {
     const cacheKey = "collections:featured";
-    console.log('[getFeaturedCollection] Starting...');
 
     try {
         // 1. Try to get data from Redis
         const cachedData = await redisClient.get(cacheKey);
-        console.log('[getFeaturedCollection] Cache check:', cachedData ? 'HIT (length: ' + (cachedData?.length || 0) + ')' : 'MISS');
-        
         if (cachedData) {
             try {
                 const parsed = JSON.parse(cachedData);
-                console.log('[getFeaturedCollection] Parsed cache:', Array.isArray(parsed) ? `array[${parsed.length}]` : typeof parsed);
-                
                 if (Array.isArray(parsed)) {
                     if (parsed.length > 0) {
-                        console.log('[getFeaturedCollection] Returning non-empty cache');
                         return res.status(200).json({ data: parsed });
                     }
-                    console.log('[getFeaturedCollection] Cache is empty array, deleting stale cache');
                     await redisClient.del(cacheKey);
                 }
             } catch (err) {
-                console.warn('[getFeaturedCollection] Invalid cache, refreshing from DB:', err?.message || err);
+                console.warn('Invalid featured collections cache value, refreshing from DB:', err?.message || err);
                 await redisClient.del(cacheKey);
             }
         }
 
         // 2. If not in Redis, get from MongoDB
-        console.log('[getFeaturedCollection] Querying MongoDB...');
-        const featured = await Collection.find({ "featured.isFeatured": true }).lean();
-        console.log('[getFeaturedCollection] DB returned', featured.length, 'featured collections');
+        const featured = await Collection.find({ "featured.isFeatured": true })
+            .populate("featured.featuredCategory", "name");
 
-        // 3. Save result to Redis ONLY if non-empty (expire in 1 hour)
-        console.log('[getFeaturedCollection] Caching result...');
-        if (featured.length > 0) {
-            try {
-                await redisClient.setEx(cacheKey, 3600, JSON.stringify(featured));
-            } catch (err) {
-                console.warn('[getFeaturedCollection] Redis cache write failed:', err?.message);
-                // Continue anyway, still return data to user
-            }
-        }
-        console.log('[getFeaturedCollection] Response sent:', featured.length, 'collections');
+        // 3. Save result to Redis for next time (expire in 1 hour)
+        await redisClient.setEx(cacheKey, 3600, JSON.stringify(featured));
 
         res.status(200).json({ success: true, source: "database", data: featured });
-    } catch (error) {
-        console.error('[getFeaturedCollection] ERROR:', error);
+    } catch (error) {      
         res.status(500).json({ error: error.message });
     }
 };

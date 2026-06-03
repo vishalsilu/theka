@@ -13,38 +13,20 @@ const redisClient = createClient({
     url: redisUrl,
     socket: {
         tls: isUpstash,
-        keepAlive: isUpstash ? 10000 : 5000,  // Longer keep-alive for Upstash
+        keepAlive: 5000,
         noDelay: true,
         reconnectStrategy: (retries) => {
-            if (isUpstash) {
-                // More aggressive retry for Upstash intermittent failures
-                return Math.min(retries * 50, 1000);
-            }
             return Math.min(retries * 100, 3000);
-        },
-        // Upstash-specific: increase socket timeout
-        ...(isUpstash && { timeout: 30000 })
+        }
     },
-    maxRetriesPerRequest: isUpstash ? 3 : 5,
-    disableOfflineQueue: false,  // Allow queue for transient failures
-    // Add connection timeout
-    commandTimeout: isUpstash ? 15000 : 10000
+    maxRetriesPerRequest: 5,
+    disableOfflineQueue: true
 });
 
-redisClient.on('error', (err) => {
-    if (isUpstash) {
-        console.error('⚠️ Upstash Redis Error:', err.message);
-        // Upstash timeouts are expected occasionally - log but don't crash
-        if (err.message?.includes('timeout') || err.message?.includes('ECONNREFUSED')) {
-            console.log('🔄 Upstash connection issue - will retry on next request');
-        }
-    } else {
-        console.error('❌ Local Redis Client Error:', err);
-    }
-});
+redisClient.on('error', (err) => console.error('❌ Redis Client Error:', err));
 redisClient.on('connect', () => console.log(`🔄 Redis connecting (${isUpstash ? 'Upstash Cloud' : 'Local Redis'})...`));
 redisClient.on('ready', () => console.log(`✅ Redis Client Ready (${isUpstash ? 'Upstash Cloud' : 'Local Redis'})`));
-redisClient.on('reconnecting', () => console.log(`🔄 Redis reconnecting (${isUpstash ? 'Upstash' : 'Local'})...`));
+redisClient.on('reconnecting', () => console.log('🔄 Redis reconnecting...'));
 redisClient.on('end', () => console.log('⚠️ Redis connection closed'));
 
 const connectRedis = async () => {

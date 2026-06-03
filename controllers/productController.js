@@ -385,14 +385,7 @@ export const getProductsByCollection = async (req, res) => {
             };
         });
 
-        // Only cache non-empty results to avoid Upstash stale empty arrays
-        if (products.length > 0) {
-            try {
-                await redisClient.setEx(cacheKey, 10800, JSON.stringify(products));
-            } catch (err) {
-                console.warn('[getProductsByCollection] Redis cache write failed:', err?.message);
-            }
-        }
+        await redisClient.setEx(cacheKey, 10800, JSON.stringify(products));
         res.status(200).json(products);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -481,14 +474,7 @@ export const getProductsByCategory = async (req, res) => {
             };
         });
 
-        // Only cache non-empty results to avoid Upstash stale empty arrays
-        if (products.length > 0) {
-            try {
-                await redisClient.setEx(cacheKey, 10800, JSON.stringify(products));
-            } catch (err) {
-                console.warn('[getProductsByCategory] Redis cache write failed:', err?.message);
-            }
-        }
+        await redisClient.setEx(cacheKey, 10800, JSON.stringify(products));
 
         res.status(200).json(products);
     } catch (error) {
