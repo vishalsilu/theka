@@ -543,38 +543,48 @@ export const removeReview = async (req, res) => {
       );
     }
 
-    // 4. COMPREHENSIVE REDIS CACHE INVALIDATION PIPELINE
-    const keysToInvalidate = [
-      `order:detail:${orderId}`,
-      `orders:user:${userId}`,
-      `product:detail:${productId}`,                 // Clear by direct Object ID
-      `product:detail:${productUpdate.id}`,          // Clear by custom numeric String ID fallback
-      "products:all",
-      "products:featured"
-    ];
+        // 4. Invalidate product detail + list caches using shared helpers
 
-    // Dynamically flush out matching category and collection listings
-    if (productUpdate.categoryInfo?.name || productUpdate.categoryInfo?.id) {
-      const catName = String(productUpdate.categoryInfo.name || '').toLowerCase();
-      const catId = productUpdate.categoryInfo.id;
-      if (catName) keysToInvalidate.push(`products:category:${catId}`);
-      
-      // Also invalidate category combinations if you use them
-      if (productUpdate.collectionInfo?.name) {
-        const collName = String(productUpdate.collectionInfo.name).toLowerCase();
-        keysToInvalidate.push(`products:${collName}:${catName}:lite`);
-      }
-    }
+        try {
+            // Ensure both detail keys (custom id and mongo _id) are removed
+            const detailKeys = [
+                `product:detail:${productId}`,
+                `product:detail:${productUpdate.id}`,
+                `product:detail:${productUpdate._id}`
+            ].filter(Boolean).map(String);
+            console.log('Invalidating product detail keys:', detailKeys);
+            await safeRedisDel(detailKeys);
 
-    if (productUpdate.collectionInfo?.name || productUpdate.collectionInfo?.id) {
-      const collName = String(productUpdate.collectionInfo.name || '').toLowerCase();
-      const collId = productUpdate.collectionInfo.id;
-      if (collId) keysToInvalidate.push(`products:collection:${collId}`);
-      if (collName) keysToInvalidate.push(`collectionProducts:${collName}:lite`);
-    }
+            // Invalidate broader list caches (category/collection/global)
+            await invalidateProductCache({
+                categoryId: normalizeCacheId(productUpdate.categoryInfo?.id || productUpdate.categoryInfo?._id),
+                collectionId: normalizeCacheId(productUpdate.collectionInfo?.id || productUpdate.collectionInfo?._id),
+                categoryName: productUpdate.categoryInfo?.name,
+                collectionName: productUpdate.collectionInfo?.name,
+                productId: productUpdate.id
+            });
 
-    // Execute multi-key extraction deletion safely
-    await safeRedisDel(keysToInvalidate);
+            // Also clear order/user-specific caches if present
+            if (orderId) await safeRedisDel(`order:detail:${orderId}`).catch(() => {});
+            if (userId) await safeRedisDel(`orders:user:${userId}`).catch(() => {});
+            // Sweep any product detail keys that may have been cached under alternate forms
+            try {
+                const pidStr = String(productUpdate.id || productId || '');
+                const mongoIdStr = String(productUpdate._id || '');
+                for await (const key of redisClient.scanIterator({ MATCH: `product:detail:*${pidStr}*` })) {
+                    await safeRedisDel(key).catch(() => {});
+                }
+                if (mongoIdStr) {
+                    for await (const key of redisClient.scanIterator({ MATCH: `product:detail:*${mongoIdStr}*` })) {
+                        await safeRedisDel(key).catch(() => {});
+                    }
+                }
+            } catch (sweepErr) {
+                console.warn('Error sweeping product detail keys after review removal:', sweepErr?.message || sweepErr);
+            }
+        } catch (err) {
+            console.warn('Error invalidating caches after review removal:', err?.message || err);
+        }
 
     return res.status(200).json({ success: true, message: "Review removed and cache refreshed successfully" });
   } catch (error) {
@@ -638,39 +648,40 @@ export const removeReviewAdmin = async (req, res) => {
       }
     }
 
-    // 4. COMPREHENSIVE REDIS CACHE INVALIDATION PIPELINE
-    const keysToInvalidate = [
-      "products:all",
-      "products:featured",
-      `product:detail:${productId}`,
-      `product:detail:${customProductId}`
-    ];
+        // 4. Invalidate product detail + list caches using shared helpers
+        try {
+            // Ensure both detail keys (mongo _id and custom id) are removed
+            await safeRedisDel(`product:detail:${productId}`, `product:detail:${customProductId}`);
 
-    // Only append user and order keys if they were successfully derived from the query pipeline
-    if (userId) keysToInvalidate.push(`orders:user:${userId}`);
-    if (derivedOrderId) keysToInvalidate.push(`order:detail:${derivedOrderId}`);
+            // Invalidate category/collection and global list caches
+            await invalidateProductCache({
+                categoryId: normalizeCacheId(productUpdate.categoryInfo?.id || productUpdate.categoryInfo?._id),
+                collectionId: normalizeCacheId(productUpdate.collectionInfo?.id || productUpdate.collectionInfo?._id),
+                categoryName: productUpdate.categoryInfo?.name,
+                collectionName: productUpdate.collectionInfo?.name,
+                productId: productUpdate.id
+            });
 
-    // Dynamically clear matching category and collection listings
-    if (productUpdate.categoryInfo?.name || productUpdate.categoryInfo?.id) {
-      const catName = String(productUpdate.categoryInfo.name || '').toLowerCase();
-      const catId = productUpdate.categoryInfo.id;
-      if (catId) keysToInvalidate.push(`products:category:${catId}`);
-      
-      if (productUpdate.collectionInfo?.name) {
-        const collName = String(productUpdate.collectionInfo.name).toLowerCase();
-        keysToInvalidate.push(`products:${collName}:${catName}:lite`);
-      }
-    }
-
-    if (productUpdate.collectionInfo?.name || productUpdate.collectionInfo?.id) {
-      const collName = String(productUpdate.collectionInfo.name || '').toLowerCase();
-      const collId = productUpdate.collectionInfo.id;
-      if (collId) keysToInvalidate.push(`products:collection:${collId}`);
-      if (collName) keysToInvalidate.push(`collectionProducts:${collName}:lite`);
-    }
-
-    // Execute multi-key extraction deletion safely
-    await safeRedisDel(keysToInvalidate);
+            if (userId) await safeRedisDel(`orders:user:${userId}`).catch(() => {});
+            if (derivedOrderId) await safeRedisDel(`order:detail:${derivedOrderId}`).catch(() => {});
+            // Additional sweep for alternate product detail cache keys
+            try {
+                const pidStr = String(productUpdate?.id || customProductId || '');
+                const mongoIdStr = String(productId || '');
+                for await (const key of redisClient.scanIterator({ MATCH: `product:detail:*${pidStr}*` })) {
+                    await safeRedisDel(key).catch(() => {});
+                }
+                if (mongoIdStr) {
+                    for await (const key of redisClient.scanIterator({ MATCH: `product:detail:*${mongoIdStr}*` })) {
+                        await safeRedisDel(key).catch(() => {});
+                    }
+                }
+            } catch (sweepErr) {
+                console.warn('Error sweeping product detail keys after admin review removal:', sweepErr?.message || sweepErr);
+            }
+        } catch (err) {
+            console.warn('Error invalidating caches after admin review removal:', err?.message || err);
+        }
 
     return res.status(200).json({ success: true, message: "Review removed successfully by Admin" });
   } catch (error) {

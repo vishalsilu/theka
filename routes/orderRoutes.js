@@ -33,7 +33,7 @@ router.delete("/admin/:orderId", protect, adminOnly, deleteOrderAdmin);
 
 router.get("/:orderId", getOrderById);
 
-router.patch("/:orderId/reviews", upload.any(), submitOrderReviews);
+router.patch("/:orderId/reviews", protect, upload.any(), submitOrderReviews);
 router.patch("/:orderId/cancel", cancelOrder);
 
 export default router;

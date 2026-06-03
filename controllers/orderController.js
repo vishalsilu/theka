@@ -431,23 +431,47 @@ console.log("Updating order");
       }
 console.log("Order updated");
 
-      // 3. Clear relevant product layout cache blocks
+      // 3. Clear relevant product layout cache blocks (both id and _id)
       const cacheKeys = [
         `product:detail:${product.id}`,
+        `product:detail:${product._id}`,
         'products:all',
         'products:featured',
         `orders:user:${userId}`
       ];
 
-      if (product.collectionInfo?.name) {
-        cacheKeys.push(`collectionProducts:${product.collectionInfo.name.toLowerCase()}:lite`);
-      }
-      if (product.collectionInfo?.name && product.categoryInfo?.name) {
-        cacheKeys.push(`products:${product.collectionInfo.name.toLowerCase()}:${product.categoryInfo.name.toLowerCase()}:lite`);
-      }
+      // Add collection/category list keys if available
+      const collName = product.collectionInfo?.name ? String(product.collectionInfo.name).toLowerCase() : null;
+      const catName = product.categoryInfo?.name ? String(product.categoryInfo.name).toLowerCase() : null;
+      const collId = product.collectionInfo?.id || product.collectionInfo?._id || null;
+      const catId = product.categoryInfo?.id || product.categoryInfo?._id || null;
+
+      if (collName) cacheKeys.push(`collectionProducts:${collName}:lite`);
+      if (collName && catName) cacheKeys.push(`products:${collName}:${catName}:lite`);
+      if (collId) cacheKeys.push(`products:collection:${collId}`);
+      if (catId) cacheKeys.push(`products:category:${catId}`);
 
       if (cacheKeys.length > 0 && typeof redisClient?.del === 'function') {
-        await redisClient.del(...cacheKeys);
+        try {
+          await redisClient.del(...cacheKeys);
+        } catch (err) {
+          console.warn('Error deleting cache keys for review submission:', err?.message || err);
+        }
+      }
+
+      // Additionally sweep list-style caches that may match dynamic filters
+      try {
+        for await (const key of redisClient.scanIterator({ MATCH: "products:*:*:lite" })) {
+          await redisClient.del(key).catch(() => {});
+        }
+        for await (const key of redisClient.scanIterator({ MATCH: "collectionProducts:*" })) {
+          await redisClient.del(key).catch(() => {});
+        }
+        for await (const key of redisClient.scanIterator({ MATCH: "products:category:*" })) {
+          await redisClient.del(key).catch(() => {});
+        }
+      } catch (err) {
+        console.warn('Error sweeping list caches after reviews:', err?.message || err);
       }
     }
 console.log("Removed cache");
