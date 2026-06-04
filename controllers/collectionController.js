@@ -4,19 +4,31 @@ import { deleteFromCloudinary } from "../config/cloudinary.js";
 import { enqueueNamePropagationJob } from "../tasks/namePropagation.js";
 
 const clearCollectionCache = async (id = null) => {
-    // These keys are "Global" - they affect everyone
-    const keys = [
-        "collections:all", 
-        "navigation:megamenu", 
+    // Explicit global cache keys
+    const globalKeys = [
+        "collections:all",
+        "navigation:megamenu",
         "collections:featured"
     ];
 
-    // This key is "Specific" - only affects one collection detail page
-    if (id) keys.push(`collections:detail:${id}`);
-    
+    if (id) {
+        globalKeys.push(`collections:detail:${id}`);
+        globalKeys.push(`collection:${id}`);
+    }
+
     try {
-        const toDel = keys.filter(Boolean);
-        if (toDel.length) await redisClient.del(...toDel);
+        const toDel = globalKeys.filter(Boolean);
+        if (toDel.length) {
+            await redisClient.del(...toDel);
+        }
+
+        // Also sweep any remaining collection-specific cache patterns
+        for await (const key of redisClient.scanIterator({ MATCH: `collections:*` })) {
+            await redisClient.del(key).catch(() => {});
+        }
+        for await (const key of redisClient.scanIterator({ MATCH: `collection:*` })) {
+            await redisClient.del(key).catch(() => {});
+        }
     } catch (err) {
         console.error("Redis Cache Invalidation Error:", err);
     }
@@ -52,6 +64,7 @@ export const createCollection = async (req, res) => {
 
 export const getAllCollections = async (req, res) => {
     try {
+        res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
         const cacheKey = "collections:all";
 
         // 1. Check Redis Cache
@@ -61,7 +74,7 @@ export const getAllCollections = async (req, res) => {
                 const parsed = JSON.parse(cached);
                 if (Array.isArray(parsed)) {
                     if (parsed.length > 0) {
-                        return res.status(200).json({ success: true, collections: parsed });
+                        return res.status(200).json({ success: true, collections: parsed, source: 'cache' });
                     }
                     // Empty array cache may be stale if the DB now contains collections.
                     await redisClient.del(cacheKey);
@@ -78,7 +91,7 @@ export const getAllCollections = async (req, res) => {
 
         // 3. Save to Redis (Expire in 24 hours)
         await redisClient.setEx(cacheKey, 86400, JSON.stringify(collections));
-        res.status(200).json({ success: true, collections });
+        res.status(200).json({ success: true, collections, source: 'db' });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -114,13 +127,7 @@ export const toggleCollectionFeatured = async (req, res) => {
             .populate("featured.featuredCategory", "name");
 
         // --- REDIS LOGIC: CACHE INVALIDATION ---
-        // 1. Delete the specific collection cache
-        await redisClient.del(`collection:${id}`);
-        
-        // 2. Delete list caches (like 'all_collections' or 'featured_collections')
-        // This ensures the lists on the frontend reflect the change immediately
-        await redisClient.del("collections:featured");
-        await redisClient.del("collections:all");
+        await clearCollectionCache(id);
 
         res.status(200).json({ success: true, data: updated });
     } catch (error) {
@@ -130,6 +137,7 @@ export const toggleCollectionFeatured = async (req, res) => {
 
 export const getCollectionDetails = async (req, res) => {
     try {
+        res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
         const { id } = req.params;
         const cacheKey = `collections:detail:${id}`;
 
@@ -237,6 +245,7 @@ export const deleteCollection = async (req, res) => {
 };
 
 export const getFeaturedCollection = async (req, res) => {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     const cacheKey = "collections:featured";
 
     try {
@@ -247,7 +256,7 @@ export const getFeaturedCollection = async (req, res) => {
                 const parsed = JSON.parse(cachedData);
                 if (Array.isArray(parsed)) {
                     if (parsed.length > 0) {
-                        return res.status(200).json({ data: parsed });
+                        return res.status(200).json({ success: true, source: 'cache', data: parsed });
                     }
                     await redisClient.del(cacheKey);
                 }

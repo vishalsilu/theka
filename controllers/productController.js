@@ -17,10 +17,22 @@ const normalizeCacheName = (value) => {
     return String(value).trim().toLowerCase();
 };
 
+const parseBooleanValue = (value) => {
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    return value;
+};
+
 const safeRedisDel = async (...keys) => {
     const flattened = keys.flat(Infinity).filter(Boolean).map(String);
     if (!flattened.length) return;
     return await redisClient.del(...flattened);
+};
+
+const setNoStoreHeaders = (res) => {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
 };
 
 const buildProductCacheKeys = ({ collectionId, categoryId, collectionName, categoryName } = {}) => {
@@ -175,6 +187,12 @@ console.log(productData);
                 }
             }
         });
+        if (typeof productData.isFeatured === 'string') {
+            productData.isFeatured = parseBooleanValue(productData.isFeatured);
+        }
+        if (typeof productData.taxable === 'string') {
+            productData.taxable = parseBooleanValue(productData.taxable);
+        }
                      
         // Resolve Reference IDs safely
         const resolveReferenceInfo = async (info, Model, fieldName) => {
@@ -266,7 +284,8 @@ console.log(productData.collectionInfo, productData.categoryInfo, "HAHAHA");
         const newProduct = new Product(productData);
         await newProduct.save();
 
-        // 7. Evict Redis Caching keys if clean function exists
+        // 7. Evict Redis cache keys for products immediately when a new product is created
+        await safeRedisDel("products:featured", "products:all");
         if (typeof invalidateProductCache === 'function') {
             const payload = {
                 categoryId: normalizeCacheId(newProduct.categoryInfo?.id || newProduct.categoryInfo?._id),
@@ -881,14 +900,14 @@ export const updateProduct = async (req, res) => {
         console.log('UPDATE: req.files', (req.files || []).map(file => ({ fieldname: file.fieldname, originalname: file.originalname, path: file.path, url: getFileUrl(file) })));
         let updateData = { ...req.body };
         
-
+console.log('UPDATE: initial updateData', updateData);
         const product = await Product.findOne({ id: id });
         
       
         
         if (!product) return res.status(404).json({ message: "Product not found" });
 
-        // Parse JSON strings, including timeline data from multipart form payloads
+        // Parse JSON strings and boolean strings from multipart form payloads
         const fieldsToParse = ['variants', 'discount', 'collectionInfo', 'categoryInfo', 'timeline'];
         fieldsToParse.forEach(field => {
             if (typeof updateData[field] === 'string') {
@@ -904,6 +923,12 @@ export const updateProduct = async (req, res) => {
                 }
             }
         });
+        if (typeof updateData.isFeatured === 'string') {
+            updateData.isFeatured = parseBooleanValue(updateData.isFeatured);
+        }
+        if (typeof updateData.taxable === 'string') {
+            updateData.taxable = parseBooleanValue(updateData.taxable);
+        }
 
         const { byToken: uploadedByToken, byVariantIndex: uploadedByVariantIndex } = buildUploadMappings(req);
 
@@ -939,10 +964,10 @@ export const updateProduct = async (req, res) => {
             { $set: updateData },
             { new: true, runValidators: true }
         );
-        console.log('UPDATE: updatedProduct', updatedProduct);
 
         // Invalidate individual product detail cache immediately
         await safeRedisDel(`product:detail:${id}`);
+        await safeRedisDel("products:featured", "products:all");
 
         // Remove any images that existed previously but are not present in the updated product.
         try {
@@ -1017,6 +1042,7 @@ export const deleteProduct = async (req, res) => {
 
         // Invalidate individual product detail cache
         await safeRedisDel(`product:detail:${id}`);
+        await safeRedisDel("products:featured", "products:all");
         const delPayload = {
             categoryId: normalizeCacheId(deletedProduct.categoryInfo?.id || deletedProduct.categoryInfo?._id),
             collectionId: normalizeCacheId(deletedProduct.collectionInfo?.id || deletedProduct.collectionInfo?._id),
@@ -1036,6 +1062,7 @@ export const deleteProduct = async (req, res) => {
 // --- GET FEATURED PRODUCTS ---
 export const getFeaturedProducts = async (req, res) => {
     try {
+        setNoStoreHeaders(res);
         const cacheKey = "products:featured";
         const cached = await redisClient.get(cacheKey);
         if (cached) return res.status(200).json(JSON.parse(cached));
@@ -1096,6 +1123,7 @@ export const getFeaturedProducts = async (req, res) => {
 
 export const getAllProducts = async (req, res) => {
     try {
+        setNoStoreHeaders(res);
         const cacheKey = "products:all";
         const cached = await redisClient.get(cacheKey);
         if (cached) return res.status(200).json(JSON.parse(cached));

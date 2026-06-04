@@ -35,8 +35,8 @@ const defaultOrigins = [
   'http://172.20.10.13:5174',
   'http://172.28.56.116:5174',
   // Typically your Admin Dashboard
-  'https://haryanaroyalty.netlify.app',
-  'https://adminharyanaroyalty.netlify.app'
+  'https://urbanroyalty.netlify.app',
+  'https://adminurbanroyalty.netlify.app'
 ];
 
 const allowedOrigins = process.env.ALLOWED_ORIGINS
