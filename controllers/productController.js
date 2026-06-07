@@ -169,7 +169,6 @@ const combineVariantImages = (variant = {}, existingVariant = {}, index, byToken
 export const createProduct = async (req, res) => {
     try {
         let productData = { ...req.body };
-console.log(productData);
 
         // 1. Parse JSON strings safely from multi-part FormData payload
         const fieldsToParse = ['variants', 'discount', 'collectionInfo', 'categoryInfo', 'timeline'];
@@ -196,7 +195,6 @@ console.log(productData);
                      
         // Resolve Reference IDs safely
         const resolveReferenceInfo = async (info, Model, fieldName) => {
-            console.log(info);
             
             if (!info || (!info.id && !info.name)) {
                 throw new Error(`Missing required ${fieldName}. Please select a valid category and collection.`);
@@ -218,7 +216,6 @@ console.log(productData);
             }
             return { id: record._id, name: record.name };
         };
-console.log(productData.collectionInfo, productData.categoryInfo, "HAHAHA");
 
 
         productData.collectionInfo = await resolveReferenceInfo(productData.collectionInfo, Collection, 'collectionInfo');
@@ -498,7 +495,6 @@ export const getProductsByCategory = async (req, res) => {
 
         res.status(200).json(products);
     } catch (error) {
-        console.log(error);
 
         res.status(500).json({ error: "Internal Server Error" });
     }
@@ -571,7 +567,6 @@ export const removeReview = async (req, res) => {
                 `product:detail:${productUpdate.id}`,
                 `product:detail:${productUpdate._id}`
             ].filter(Boolean).map(String);
-            console.log('Invalidating product detail keys:', detailKeys);
             await safeRedisDel(detailKeys);
 
             // Invalidate broader list caches (category/collection/global)
@@ -891,16 +886,11 @@ export const getSpecificProduct = async (req, res) => {
 
 // --- UPDATE PRODUCT ---
 export const updateProduct = async (req, res) => {
-    // console.log(req.params);
     
     try {
         const { id } = req.params;
-        console.log('UPDATE: id', id);
-        console.log('UPDATE: req.body keys', Object.keys(req.body));
-        console.log('UPDATE: req.files', (req.files || []).map(file => ({ fieldname: file.fieldname, originalname: file.originalname, path: file.path, url: getFileUrl(file) })));
         let updateData = { ...req.body };
         
-console.log('UPDATE: initial updateData', updateData);
         const product = await Product.findOne({ id: id });
         
       

@@ -192,7 +192,6 @@ export const putCart = async (req, res) => {
         let cartToken = String(req.headers['x-cart-token'] || '').trim();
         
         const finalItems = sanitizeThinCart(req.body?.items);
-        console.log(finalItems);
         
         if (userId) {
             // 1. Save to Redis instantly (keeps app responsive)
@@ -274,11 +273,9 @@ export const clearCart = async (req, res) => {
                 { id: userId },
                 { $set: { cart: [] } }
             ).catch(() => {});
-            console.log(`✅ Cart cleared from Redis & MongoDB for user ${userId}`);
         } else if (cartToken && TOKEN_REGEX.test(cartToken)) {
             // Clear guest cart from Redis only (guests don't have MongoDB)
             await redisClient.del(`${CART_PREFIX_GUEST}${cartToken}`).catch(() => {});
-            console.log(`✅ Guest cart cleared from Redis for token ${cartToken}`);
         }
 
         return res.status(200).json({ success: true, message: "Cart cleared" });

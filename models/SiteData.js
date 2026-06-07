@@ -96,8 +96,8 @@ const ShippingMethodSchema = new mongoose.Schema({
 }, { _id: false });
 
 const ShippingSchema = new mongoose.Schema({
-  defaultCost: { type: Number, default: 0 },
-  freeShippingThreshold: { type: Number, default: 0 },
+  defaultCost: { type: Number, default: 99 },
+  freeShippingThreshold: { type: Number, default: 2000 },
   handlingTime: { type: String, trim: true, default: '' },
   methods: { type: [ShippingMethodSchema], default: [] }
 }, { _id: false });

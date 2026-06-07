@@ -285,7 +285,6 @@ export const getDynamicFiltersByName = async (req, res) => {
         // 3. Try fetching compiled filter sets from Redis first
         const cachedData = await redisClient.get(cacheKey);
         if (cachedData) {
-            console.log("Fetched filters from redis cache");
             return res.status(200).json(JSON.parse(cachedData));
         }
 

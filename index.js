@@ -17,13 +17,17 @@ import siteDataRoutes from "./routes/siteDataRoutes.js"
 import invoiceRoutes from "./routes/invoiceRoutes.js"
 import analyticsRoutes from './routes/analyticsRoutes.js'
 import adminUserRoutes from './routes/adminUserRoutes.js'
+import subscriberRoutes from './routes/subscriberRoutes.js';
 import { startCartSyncCron } from "./utils/cartSync.js";
 import startNamePropagation from "./tasks/namePropagation.js";
 import attributeRoutes from './routes/attributeRoutes.js'
+import { connectToWhatsApp } from './config/whatsapp.js';
 
 
 const app = express();
+app.use(cookieParser());
 const port = process.env.PORT || 5000;
+const otpCache = new Map();
 
 // Middlewares
 const defaultOrigins = [
@@ -39,6 +43,8 @@ const defaultOrigins = [
   'https://adminurbanroyalty.netlify.app'
 ];
 
+ // Debugging line to confirm initialization
+
 const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map((origin) => origin.trim()).filter(Boolean)
   : defaultOrigins;
@@ -51,11 +57,11 @@ app.use(cors({
       callback(new Error('Not allowed by CORS'));
     }
   },
-  credentials: true
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-id']
 }));
 app.use(express.json());
 // Parse cookies for cookie-based auth
-app.use(cookieParser());
 
 // Routes
 app.use('/api/users', userRoutes);
@@ -69,6 +75,8 @@ app.use('/admin/api/coupons', couponRoutes)
 app.use('/api/site', siteDataRoutes)
 app.use('/admin/api/site', siteDataRoutes)
 app.use('/api', searchRoutes)
+app.use('/api/subscribers', subscriberRoutes);
+app.use('/admin/api/subscribers', subscriberRoutes);
 
 app.use('/api/invoices', invoiceRoutes)
 app.use('/admin/api/invoices', invoiceRoutes)
@@ -111,6 +119,7 @@ await connectRedis();
 
         // 4. Start Listening
         app.listen(port, '0.0.0.0', () => {
+            // connectToWhatsApp();
             console.log(`🚀 Server spinning on http://localhost:${port}`);
         });
     } catch (error) {

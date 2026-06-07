@@ -3,6 +3,7 @@ import User from "../models/Users.js";
 import Product from "../models/Product.js";
 import Coupon from "../models/Coupon.js";
 import Invoice from "../models/Invoice.js";
+import SiteData from "../models/SiteData.js";
 import { evaluateCoupon } from "./couponController.js";
 import { redisClient } from "../config/redis.js";
 
@@ -29,14 +30,28 @@ const normalizeItems = (items) => {
     .filter((i) => i.productId && i.name);
 };
 
-const computeTotals = ({ items, coupon }) => {
+const getShippingConfig = async () => {
+  const siteData = await SiteData.findOne({}).lean();
+  const rawCost = Number(siteData?.shipping?.defaultCost);
+  const defaultCost = rawCost > 0 ? rawCost : 99;
+  const freeShippingThreshold =
+    typeof siteData?.shipping?.freeShippingThreshold === 'number' && siteData.shipping.freeShippingThreshold > 0
+      ? siteData.shipping.freeShippingThreshold
+      : Infinity;
+
+  return { defaultCost, freeShippingThreshold };
+};
+
+const computeTotals = ({ items, coupon, shippingConfig }) => {
   const subtotal = items.reduce((acc, it) => acc + it.price * it.quantity, 0);
 
   let discount = Number(coupon?.discountValue || 0);
   discount = Math.max(0, Math.min(discount, subtotal));
 
   const afterDiscount = subtotal - discount;
-  const shipping = coupon?.type === "shipping" || afterDiscount > 2999 ? 0 : 99;
+  const shipping = coupon?.type === "shipping" || afterDiscount >= shippingConfig.freeShippingThreshold
+    ? 0
+    : shippingConfig.defaultCost;
   const tax = 0;
   const total = afterDiscount + shipping + tax;
 
@@ -131,14 +146,14 @@ if (discType === 'percentage' && discValue > 0) {
       coupon = { code: couponDoc.code, discountValue: couponCheck.discountAmount, type: couponDoc.type };
     }
 
-    const totals = computeTotals({ items: enrichedItems, coupon });
+    const shippingConfig = await getShippingConfig();
+    const totals = computeTotals({ items: enrichedItems, coupon, shippingConfig });
     let orderId = generateOrderId();
     
     const order = await Order.create({
       orderId, userId, items: enrichedItems, ...totals, coupon, paymentMethod,
       status: "Placed", shippingAddress, tracking: [{ status: "Order Placed", date: today() }]
     });
-console.log(order);
 
     // Create invoice record (immutable) for this order
     try {
@@ -148,11 +163,11 @@ console.log(order);
       // Note: invoice is stored separately and cannot be changed once created
       // Invalidate any invoice caches if implemented (none yet)
       
-      // include invoice reference in response
-      return res.status(201).json({ success: true, order, invoice });
+      // include invoice reference and shipping for easier frontend consumption
+      return res.status(201).json({ success: true, order, invoice, shipping: order.shipping });
     } catch (invErr) {
       console.warn('Invoice creation failed', invErr);
-      return res.status(201).json({ success: true, order });
+      return res.status(201).json({ success: true, order, shipping: order.shipping });
     }
 
     // Update coupon usage
@@ -330,7 +345,6 @@ export const cancelOrder = async (req, res) => {
 // import Product from "./Product.js"; // Ensure your Product model is imported here
 
 export const submitOrderReviews = async (req, res) => {
-  console.log("Got data");
   
   try {
     const userId = req.user?.id;
@@ -341,7 +355,6 @@ export const submitOrderReviews = async (req, res) => {
     // Fetch full document to leverage model mutations safely
     const order = await Order.findOne({ orderId });
     if (!order) return res.status(404).json({ error: "Order not found" });
-    console.log("Order found");
     
     if (order.userId !== userId && req.user?.role !== "Admin") return res.status(403).json({ error: "Forbidden" });
     if (order.status !== "Delivered") return res.status(400).json({ error: "Reviews are only allowed for delivered orders" });
@@ -358,7 +371,6 @@ export const submitOrderReviews = async (req, res) => {
     }
 
     const orderProducts = order.items.map((item) => item.productId);
-    console.log("got order products");
     
 
     // Dynamic extraction helper for multi-storage multer configs
@@ -367,7 +379,6 @@ export const submitOrderReviews = async (req, res) => {
       return file.path || file.location || file.secure_url || file.url || '';
     };
 
-    console.log("Got files");
     
 
     // Construct dictionary of array attachments matched to input order indices
@@ -378,7 +389,6 @@ export const submitOrderReviews = async (req, res) => {
       if (fileUrl) acc[key].push(fileUrl);
       return acc;
     }, {});
-console.log("Files grouped");
 
     let orderUpdated = false;
 
@@ -406,7 +416,6 @@ console.log("Files grouped");
         rating: Number(review.rating),
         date: new Date().toISOString().split('T')[0]
       });
-console.log("Product updated reviewrd");
 
       await product.save();
 
@@ -415,7 +424,6 @@ console.log("Product updated reviewrd");
         String(item.productId) === String(review.productId) && 
         (!review.variant || item.variant === review.variant)
       );
-console.log("Updating order");
 
       if (orderItem) {
         orderItem.set('reviewed', {
@@ -429,7 +437,6 @@ console.log("Updating order");
         });
         orderUpdated = true;
       }
-console.log("Order updated");
 
       // 3. Clear relevant product layout cache blocks (both id and _id)
       const cacheKeys = [
@@ -474,7 +481,6 @@ console.log("Order updated");
         console.warn('Error sweeping list caches after reviews:', err?.message || err);
       }
     }
-console.log("Removed cache");
 
     // 4. Force save modified subdocument state on the Order Document
     if (orderUpdated) {
@@ -486,7 +492,6 @@ console.log("Removed cache");
     if (typeof redisClient?.del === 'function') {
       await redisClient.del(`order:detail:${orderId}`, `orders:user:${userId}`);
     }
-    console.log("Done");
     
 
     return res.status(200).json({ success: true, message: "Reviews submitted successfully" });

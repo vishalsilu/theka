@@ -8,19 +8,27 @@ export const protect = async (req, res, next) => {
     fetch('http://127.0.0.1:7755/ingest/6ac935e2-f8c4-4581-8a21-d5980fc75e55',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'bbe97d'},body:JSON.stringify({sessionId:'bbe97d',runId:'checkout-debug-1',hypothesisId:'H3',location:'authMiddleware.js:protect:entry',message:'Auth middleware entry',data:{hasAuthHeader:Boolean(req.headers.authorization),path:req.originalUrl,method:req.method},timestamp:Date.now()})}).catch(()=>{});
     // #endregion
 
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+    const authHeader = req.get('Authorization') || req.get('authorization') || req.headers.authorization;
+    console.log('Auth middleware headers:', {
+        authorization: authHeader,
+        cookieToken: req.cookies?.token,
+        path: req.originalUrl,
+        method: req.method
+    });
+
+    if (authHeader && typeof authHeader === 'string' && authHeader.trim().toLowerCase().startsWith('bearer ')) {
         try {
-            token = req.headers.authorization.split(' ')[1];
+            token = authHeader.trim().split(' ')[1];
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
             // 1. Try to get user from Redis first
             const cachedUser = await redisClient.get(`user:id:${decoded.id}`);
-
             if (cachedUser) {
                 console.log("⚡ Redis Hit: User authorized via cache");
                 req.user = JSON.parse(cachedUser);
                 return next(); // Exit early, no DB call needed!
             }
+
 
             // 2. Redis Miss - Get from MongoDB
             console.log("🐢 Redis Miss: Fetching user from MongoDB for authorization");
@@ -45,6 +53,7 @@ export const protect = async (req, res, next) => {
             return res.status(401).json({ alert: "Not authorized, token failed" });
         }
     } else if (req.cookies && req.cookies.token) {
+        console.log("Attempting cookie-based JWT authentication",req);
         // Support cookie-based JWT (httpOnly cookie)
         try {
             token = req.cookies.token;
