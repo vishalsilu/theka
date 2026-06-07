@@ -3,7 +3,7 @@ import axios from 'axios';
 
 dotenv.config();
 
-export const validateRecaptchaToken = async (recaptchaToken) => {
+export const validateRecaptcha = async (recaptchaToken) => {
     if (!recaptchaToken || typeof recaptchaToken !== 'string') {
         throw new Error('Security validation token missing or corrupted.');
     }

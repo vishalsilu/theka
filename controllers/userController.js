@@ -7,7 +7,7 @@ import { redisClient } from '../config/redis.js';
 import jwt from "jsonwebtoken";
 import axios from "axios";
 import { sendEmail } from '../config/email.js';
-import { validateRecaptchaToken } from "../middleware/verifyReCaptcha.js";
+import { validateRecaptcha } from "../middleware/verifyReCaptcha.js";
 import SiteData from '../models/SiteData.js'; // Ensure the path points to your actual Mongoose model file
 
 const generateToken = (id) => {
@@ -135,7 +135,7 @@ export const handleContactUsRequest = async (req, res) => {
         // 🤖 STEP 2: RECAPTCHA BOT PROTECTION
         // =========================================================
         try {
-            await validateRecaptchaToken(recaptchaToken);
+            await validateRecaptcha(recaptchaToken);
         } catch (recaptchaError) {
             return res.status(403).json({ error: recaptchaError.message });
         }
@@ -262,7 +262,7 @@ export const requestEmailOTP = async (req, res) => {
 
         if (!adminLogin) {
             try {
-                await validateRecaptchaToken(recaptchaToken);
+                await validateRecaptcha(recaptchaToken);
             } catch (recaptchaError) {
                 return res.status(403).json({ error: recaptchaError.message });
             }
