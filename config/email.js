@@ -19,7 +19,6 @@ export const sendEmail = async ({ to, subject, html }) => {
             subject,
             html,
         });
-        console.log("📨 Email successfully left the building! Message ID:", info.messageId);
         return { success: true, messageId: info.messageId };
     } catch (error) {
         console.error("❌ SMTP Subsystem Error:", error.message);

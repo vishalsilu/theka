@@ -9,12 +9,7 @@ export const protect = async (req, res, next) => {
     // #endregion
 
     const authHeader = req.get('Authorization') || req.get('authorization') || req.headers.authorization;
-    console.log('Auth middleware headers:', {
-        authorization: authHeader,
-        cookieToken: req.cookies?.token,
-        path: req.originalUrl,
-        method: req.method
-    });
+ 
 
     if (authHeader && typeof authHeader === 'string' && authHeader.trim().toLowerCase().startsWith('bearer ')) {
         try {
@@ -24,14 +19,12 @@ export const protect = async (req, res, next) => {
             // 1. Try to get user from Redis first
             const cachedUser = await redisClient.get(`user:id:${decoded.id}`);
             if (cachedUser) {
-                console.log("⚡ Redis Hit: User authorized via cache");
                 req.user = JSON.parse(cachedUser);
                 return next(); // Exit early, no DB call needed!
             }
 
 
             // 2. Redis Miss - Get from MongoDB
-            console.log("🐢 Redis Miss: Fetching user from MongoDB for authorization");
             const user = await User.findOne({ id: decoded.id }).select('-password');
 
             if (!user) {
@@ -53,7 +46,6 @@ export const protect = async (req, res, next) => {
             return res.status(401).json({ alert: "Not authorized, token failed" });
         }
     } else if (req.cookies && req.cookies.token) {
-        console.log("Attempting cookie-based JWT authentication",req);
         // Support cookie-based JWT (httpOnly cookie)
         try {
             token = req.cookies.token;
