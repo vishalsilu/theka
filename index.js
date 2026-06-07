@@ -58,7 +58,7 @@ app.use(cors({
     }
   },
   credentials: true,
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-id']
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-id', 'x-cart-token']
 }));
 app.use(express.json());
 // Parse cookies for cookie-based auth
