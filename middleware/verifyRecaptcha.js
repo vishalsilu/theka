@@ -3,6 +3,7 @@ import axios from 'axios';
 
 dotenv.config();
 
+// 1. Keep this naming convention clean
 export const validateRecaptcha = async (recaptchaToken) => {
     if (!recaptchaToken || typeof recaptchaToken !== 'string') {
         throw new Error('Security validation token missing or corrupted.');
@@ -32,7 +33,8 @@ export const validateRecaptcha = async (recaptchaToken) => {
 
 export const verifyRecaptcha = async (req, res, next) => {
     try {
-        await validateRecaptchaToken(req.body.recaptchaToken);
+        // 2. FIXED: Changed from validateRecaptchaToken to validateRecaptcha to match the function declaration above
+        await validateRecaptcha(req.body.recaptchaToken);
         return next();
     } catch (error) {
         console.error('❌ reCAPTCHA middleware handshake crashed:', error.message);

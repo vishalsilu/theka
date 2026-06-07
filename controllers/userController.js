@@ -7,7 +7,7 @@ import { redisClient } from '../config/redis.js';
 import jwt from "jsonwebtoken";
 import axios from "axios";
 import { sendEmail } from '../config/email.js';
-import { validateRecaptcha } from "../middleware/verifyReCaptcha.js";
+import { validateRecaptcha } from "../middleware/verifyRecaptcha.js";
 import SiteData from '../models/SiteData.js'; // Ensure the path points to your actual Mongoose model file
 
 const generateToken = (id) => {
