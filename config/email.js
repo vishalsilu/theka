@@ -1,27 +1,33 @@
-import { Resend } from 'resend';
+import nodemailer from 'nodemailer';
+import dotenv from 'dotenv';
 
-// The Resend SDK automatically looks for an environment variable named RESEND_API_KEY.
-// If you name it exactly RESEND_API_KEY on Render, you can leave the constructor empty:
-const resend = new Resend(process.env.EMAIL_PASS);
+dotenv.config();
+
+const transporter = nodemailer.createTransport({
+    pool: true, // <-- Add this for better performance on Render
+    host: 'smtp.gmail.com',
+    port: 465,
+    secure: true, 
+    auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+    },
+    tls: {
+        rejectUnauthorized: false 
+    }
+});
 
 export const sendEmail = async ({ to, subject, html }) => {
     try {
-        const { data, error } = await resend.emails.send({
-            // Free tier restriction: Must use onboarding@resend.dev until your custom domain is verified
-            from: 'Urban Support <onboarding@resend.dev>', 
-            to, // For testing, this must be your registered email (vishalsainisilu@gmail.com)
+        const info = await transporter.sendMail({
+            from: `"Urban Support" <${process.env.EMAIL_USER}>`,
+            to,
             subject,
             html,
         });
-
-        if (error) {
-            console.error("❌ Resend API Error:", error.message);
-            return { success: false, error: error.message };
-        }
-
-        return { success: true, messageId: data.id };
+        return { success: true, messageId: info.messageId };
     } catch (error) {
-        console.error("❌ Resend Subsystem Crash:", error.message);
+        console.error("❌ SMTP Subsystem Error:", error.message);
         return { success: false, error: error.message };
     }
 };
