@@ -6,7 +6,7 @@ dotenv.config();
 const transporter = nodemailer.createTransport({
     pool: true, // <-- Add this for better performance on Render
     host: 'smtp.gmail.com',
-    port: 465,
+    port: 587,
     secure: true, 
     localAddress: '0.0.0.0',
     auth: {
