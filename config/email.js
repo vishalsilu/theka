@@ -4,11 +4,17 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const transporter = nodemailer.createTransport({
-    service: 'gmail', // Use the internal "gmail" preset driver instead of manual ports
+    host: 'smtp.gmail.com',
+    port: 465,
+    secure: true, // Use true for port 465
     auth: {
         user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS, // Your 16-character app password (NO SPACES)
+        pass: process.env.EMAIL_PASS,
     },
+    tls: {
+        // This stops Render/AWS cloud certificates from failing the handshake
+        rejectUnauthorized: false 
+    }
 });
 
 export const sendEmail = async ({ to, subject, html }) => {
