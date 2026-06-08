@@ -1,22 +1,28 @@
 import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
+import dns from 'dns'; // Import Node's native DNS module
 
 dotenv.config();
 
+
 const transporter = nodemailer.createTransport({
-    pool: true, // <-- Add this for better performance on Render
     host: 'smtp.gmail.com',
     port: 587,
-    secure: true, 
-    localAddress: '0.0.0.0',
+    secure: false, 
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS,
+    },
+    // FORCE NODE TO ONLY LOOK UP IPV4 ADDRESSES
+    lookup: (hostname, options, callback) => {
+        options.family = 4; // Hard overrides the lookup to IPv4 only
+        return dns.lookup(hostname, options, callback);
     },
     tls: {
         rejectUnauthorized: false 
     }
 });
+
 
 export const sendEmail = async ({ to, subject, html }) => {
     try {
