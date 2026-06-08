@@ -3,7 +3,8 @@ dotenv.config();
 
 export const sendEmail = async ({ to, subject, html }) => {
     try {
-        const response = await fetch('https://api.brevo.com/v1/smtp/email', {
+        // 1. CHANGED: Updated URL endpoint strictly to v3
+        const response = await fetch('https://api.brevo.com/v3/smtp/email', {
             method: 'POST',
             headers: {
                 'accept': 'application/json',
@@ -12,25 +13,39 @@ export const sendEmail = async ({ to, subject, html }) => {
             },
             body: JSON.stringify({
                 sender: { 
-                    name: "Urban Support", 
-                    email: "your-gmail-address@gmail.com" // Your verified Brevo sender email
+                    name: process.env.BREVO_SENDER_NAME || "Urban Royalty Support", // Fallback name if not set
+                    email: process.env.BREVO_EMAIL_USER // Double-check this is listed under Senders in Brevo!
                 },
-                to: [{ email: to }],
+                // 2. CHANGED: Passing an explicit 'name' string along with the email
+                to: [{ 
+                    email: to,
+                    name: "Valued User" 
+                }],
                 subject: subject,
                 htmlContent: html
             })
         });
 
-        const data = await response.json();
+        const responseText = await response.text(); 
+        
+        let data = {};
+        if (responseText) {
+            try {
+                data = JSON.parse(responseText);
+            } catch (e) {
+                data = { message: responseText };
+            }
+        }
 
         if (response.ok) {
-            return { success: true, messageId: data.messageId };
+            // Brevo returns a 201 Created with a messageId string upon a successful send
+            return { success: true, messageId: data.messageId || "Dispatched successfully" };
         } else {
-            console.error("❌ Brevo API Error:", data);
+            console.error("❌ Brevo Rejected Payload. Details:", data);
             return { success: false, error: data.message || "Failed to send" };
         }
     } catch (error) {
-        console.error("❌ Network Error:", error.message);
+        console.error("❌ Underlying Network Error:", error.message);
         return { success: false, error: error.message };
     }
 };
