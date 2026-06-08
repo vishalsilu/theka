@@ -4,7 +4,6 @@ import dns from 'dns'; // Import Node's native DNS module
 
 dotenv.config();
 
-
 const transporter = nodemailer.createTransport({
     host: 'smtp.gmail.com',
     port: 587,
