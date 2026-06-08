@@ -2,7 +2,7 @@ import { Resend } from 'resend';
 
 // The Resend SDK automatically looks for an environment variable named RESEND_API_KEY.
 // If you name it exactly RESEND_API_KEY on Render, you can leave the constructor empty:
-const resend = new Resend(process.env.RESEND_API_KEY);
+const resend = new Resend(process.env.EMAIL_PASS);
 
 export const sendEmail = async ({ to, subject, html }) => {
     try {
