@@ -41,7 +41,7 @@ export const sendOfferToSubscribers = async (req, res) => {
       results.push({ to, ...r });
     }
 
-    return res.status(200).json({ success: true, sent: results.length, results });
+    return res.status(200).json({ success: true, sent: results.length });
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message });
   }
