@@ -1,39 +1,36 @@
-import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
-import dns from 'dns'; // Import Node's native DNS module
-
 dotenv.config();
-
-const transporter = nodemailer.createTransport({
-    // Direct IPv4 address for Google's SMTP server
-    host: '74.125.142.108', 
-    port: 587,
-    secure: false, 
-    auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-    },
-    tls: {
-        // CRITICAL: Because the SSL certificate belongs to "smtp.gmail.com" 
-        // and not the raw IP numbers, we must disable hostname verification 
-        // to prevent an "SSL Hostname Mismatch" error.
-        rejectUnauthorized: false,
-        checkServerIdentity: () => undefined
-    }
-});
-
 
 export const sendEmail = async ({ to, subject, html }) => {
     try {
-        const info = await transporter.sendMail({
-            from: `"Urban Support" <${process.env.EMAIL_USER}>`,
-            to,
-            subject,
-            html,
+        const response = await fetch('https://api.brevo.com/v1/smtp/email', {
+            method: 'POST',
+            headers: {
+                'accept': 'application/json',
+                'api-key': process.env.BREVO_API_KEY,
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                sender: { 
+                    name: "Urban Support", 
+                    email: "your-gmail-address@gmail.com" // Your verified Brevo sender email
+                },
+                to: [{ email: to }],
+                subject: subject,
+                htmlContent: html
+            })
         });
-        return { success: true, messageId: info.messageId };
+
+        const data = await response.json();
+
+        if (response.ok) {
+            return { success: true, messageId: data.messageId };
+        } else {
+            console.error("❌ Brevo API Error:", data);
+            return { success: false, error: data.message || "Failed to send" };
+        }
     } catch (error) {
-        console.error("❌ SMTP Subsystem Error:", error.message);
+        console.error("❌ Network Error:", error.message);
         return { success: false, error: error.message };
     }
 };
