@@ -5,20 +5,20 @@ import dns from 'dns'; // Import Node's native DNS module
 dotenv.config();
 
 const transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
+    // Direct IPv4 address for Google's SMTP server
+    host: '74.125.142.108', 
     port: 587,
     secure: false, 
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS,
     },
-    // FORCE NODE TO ONLY LOOK UP IPV4 ADDRESSES
-    lookup: (hostname, options, callback) => {
-        options.family = 4; // Hard overrides the lookup to IPv4 only
-        return dns.lookup(hostname, options, callback);
-    },
     tls: {
-        rejectUnauthorized: false 
+        // CRITICAL: Because the SSL certificate belongs to "smtp.gmail.com" 
+        // and not the raw IP numbers, we must disable hostname verification 
+        // to prevent an "SSL Hostname Mismatch" error.
+        rejectUnauthorized: false,
+        checkServerIdentity: () => undefined
     }
 });
 

@@ -31,7 +31,7 @@ const otpCache = new Map();
 
 // Middlewares
 const defaultOrigins = [
-  'http://localhost:5173', // Typically your Storefront
+  'http://localhost:5175', // Typically your Storefront
   'http://localhost:5174', // Typically your Storefront
   'http://localhost:3001',
   'http://172.20.10.13:5173',
