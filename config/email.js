@@ -1,61 +1,27 @@
-import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 
-const transporter = nodemailer.createTransport({
-    host: 'smtp.resend.com',
-    secure: true,
-    port: 465,
-    auth: {
-        user: 'resend', // This stays exactly as the string 'resend'
-        pass: process.env.EMAIL_PASS, // Your Resend API Key from Render env
-    },
-});
+// The Resend SDK automatically looks for an environment variable named RESEND_API_KEY.
+// If you name it exactly RESEND_API_KEY on Render, you can leave the constructor empty:
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 export const sendEmail = async ({ to, subject, html }) => {
     try {
-        const info = await transporter.sendMail({
-            // Free tier restriction: Must use onboarding@resend.dev until domain is verified
-            from: "Urban Support <onboarding@resend.dev>", 
-            to, // During testing, this must be YOUR personal email registered on Resend
+        const { data, error } = await resend.emails.send({
+            // Free tier restriction: Must use onboarding@resend.dev until your custom domain is verified
+            from: 'Urban Support <onboarding@resend.dev>', 
+            to, // For testing, this must be your registered email (vishalsainisilu@gmail.com)
             subject,
             html,
         });
-        return { success: true, messageId: info.messageId };
+
+        if (error) {
+            console.error("❌ Resend API Error:", error.message);
+            return { success: false, error: error.message };
+        }
+
+        return { success: true, messageId: data.id };
     } catch (error) {
-        console.error("❌ SMTP Subsystem Error:", error.message);
+        console.error("❌ Resend Subsystem Crash:", error.message);
         return { success: false, error: error.message };
     }
 };
-
-// import nodemailer from 'nodemailer';
-// import dotenv from 'dotenv';
-
-// dotenv.config();
-
-// const transporter = nodemailer.createTransport({
-//     host: 'smtp.gmail.com',
-//     port: 465,
-//     secure: true, // Use true for port 465
-//     auth: {
-//         user: process.env.EMAIL_USER,
-//         pass: process.env.EMAIL_PASS,
-//     },
-//     tls: {
-//         // This stops Render/AWS cloud certificates from failing the handshake
-//         rejectUnauthorized: false 
-//     }
-// });
-
-// export const sendEmail = async ({ to, subject, html }) => {
-//     try {
-//         const info = await transporter.sendMail({
-//             from: `"Urban Support" <${process.env.EMAIL_USER}>`,
-//             to,
-//             subject,
-//             html,
-//         });
-//         return { success: true, messageId: info.messageId };
-//     } catch (error) {
-//         console.error("❌ SMTP Subsystem Error:", error.message);
-//         return { success: false, error: error.message };
-//     }
-// };
