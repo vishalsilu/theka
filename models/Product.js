@@ -57,6 +57,12 @@ const productSchema = new mongoose.Schema({
         }
     },
 
+    status: {
+        type: String,
+        enum: ['active', 'draft'],
+        default: 'active'
+    },
+
     collectionInfo: {
         id: { type: mongoose.Schema.Types.ObjectId, ref: 'Collection', required: true },
         name: { type: String, required: true }

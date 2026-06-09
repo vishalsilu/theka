@@ -23,6 +23,12 @@ const parseBooleanValue = (value) => {
     return value;
 };
 
+const normalizeStatusValue = (value) => {
+    if (typeof value !== 'string') return undefined;
+    const normalized = value.trim().toLowerCase();
+    return ['active', 'draft'].includes(normalized) ? normalized : undefined;
+};
+
 const safeRedisDel = async (...keys) => {
     const flattened = keys.flat(Infinity).filter(Boolean).map(String);
     if (!flattened.length) return;
@@ -192,6 +198,11 @@ export const createProduct = async (req, res) => {
         if (typeof productData.taxable === 'string') {
             productData.taxable = parseBooleanValue(productData.taxable);
         }
+        if (typeof productData.status === 'string') {
+            const statusValue = normalizeStatusValue(productData.status);
+            if (statusValue) productData.status = statusValue;
+            else productData.status = 'active';
+        }
                      
         // Resolve Reference IDs safely
         const resolveReferenceInfo = async (info, Model, fieldName) => {
@@ -343,7 +354,10 @@ export const getProductsByCollection = async (req, res) => {
         }
 
         const productsRaw = await Product.find(
-            { "collectionInfo.name": { $regex: new RegExp(`^${type}$`, 'i') } },
+            {
+                "collectionInfo.name": { $regex: new RegExp(`^${type}$`, 'i') },
+                status: 'active'
+            },
             {
                 name: 1, id: 1, price: 1, discount: 1, fabric: 1,
                 pattern: 1, fit: 1, salesCount: 1, isTrending: 1, createdAt: 1,
@@ -435,7 +449,8 @@ export const getProductsByCategory = async (req, res) => {
         const productsRaw = await Product.find(
             {
                 "collectionInfo.name": { $regex: new RegExp(`^${type}$`, 'i') },
-                "categoryInfo.name": { $regex: new RegExp(`^${category}$`, 'i') }
+                "categoryInfo.name": { $regex: new RegExp(`^${category}$`, 'i') },
+                status: 'active'
             },
             {
                 name: 1, id: 1, price: 1, discount: 1, fabric: 1,
@@ -871,7 +886,7 @@ export const getSpecificProduct = async (req, res) => {
             query.push({ _id: id });
         }
 
-        const product = await Product.findOne({ $or: query })
+        const product = await Product.findOne({ status: 'active', $or: query })
             .populate('categoryInfo.id')
             .populate('collectionInfo.id');
 
@@ -919,11 +934,16 @@ export const updateProduct = async (req, res) => {
         if (typeof updateData.taxable === 'string') {
             updateData.taxable = parseBooleanValue(updateData.taxable);
         }
+        if (typeof updateData.status === 'string') {
+            const statusValue = normalizeStatusValue(updateData.status);
+            if (statusValue) updateData.status = statusValue;
+            else updateData.status = 'active';
+        }
 
         const { byToken: uploadedByToken, byVariantIndex: uploadedByVariantIndex } = buildUploadMappings(req);
 
         // Preserve existing top-level data when it is not included in the update payload
-        const preserveFields = ['sizeType', 'fabric', 'pattern', 'fit', 'collectionInfo', 'categoryInfo', 'discount', 'deal'];
+        const preserveFields = ['sizeType', 'fabric', 'pattern', 'fit', 'collectionInfo', 'categoryInfo', 'discount', 'deal', 'status'];
         preserveFields.forEach((field) => {
             if (updateData[field] === undefined && product[field] !== undefined) {
                 updateData[field] = product[field];
@@ -1057,7 +1077,7 @@ export const getFeaturedProducts = async (req, res) => {
         const cached = await redisClient.get(cacheKey);
         if (cached) return res.status(200).json(JSON.parse(cached));
 
-        const featuredProducts = await Product.find({ isFeatured: true }, {
+        const featuredProducts = await Product.find({ isFeatured: true, status: 'active' }, {
             name: 1, id: 1, price: 1, discount: 1, fabric: 1,
             pattern: 1, fit: 1, salesCount: 1, isTrending: 1, createdAt: 1,
             variants: 1, categoryInfo: 1 , collectionInfo: 1

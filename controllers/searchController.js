@@ -28,6 +28,7 @@ export const globalSearch = async (req, res) => {
 
         // 3. Setup Multi-Field matching for Products
         const productQuery = {
+            status: 'active',
             $or: [
                 { name: regex },            // Match product name (e.g., "Linen Shirt")
                 { "variants.color": regex } // Match variant color (e.g., "Blue")

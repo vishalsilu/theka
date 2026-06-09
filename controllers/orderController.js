@@ -80,8 +80,8 @@ export const createOrder = async (req, res) => {
         return res.status(400).json({ error: `Invalid item details` });
       }
 
-      const product = await Product.findOne({ id: productId }).lean();
-      if (!product) return res.status(404).json({ error: `Product ${productId} not found` });
+      const product = await Product.findOne({ id: productId, status: 'active' }).lean();
+      if (!product) return res.status(404).json({ error: `Product ${productId} not found or unavailable` });
 
       const variant = product.variants?.find(v => v.id === variantId);
       const sizeObj = variant?.sizes?.find(s => s.size === size);
@@ -218,16 +218,76 @@ if (discType === 'percentage' && discValue > 0) {
     await User.findOneAndUpdate({ id: userId }, { $set: { cart: [] } }).catch(() => {});
     await redisClient.del(`orders:user:${userId}`).catch(() => {});
 
-    // PRODUCT CACHE INVALIDATION (SYNC WITH productController keys)
+    // PRODUCT CACHE INVALIDATION — Fetch product details to build explicit cache keys
     try {
-      const keysToInvalidate = ["products:all", "products:featured"];
-      for (const item of enrichedItems) keysToInvalidate.push(`product:detail:${item.productId}`);
-      const kd = keysToInvalidate.filter(Boolean);
-      if (kd.length) await redisClient.del(...kd).catch(() => {});
+      const keysToDelete = new Set(["products:all", "products:featured"]);
 
-      // Pattern delete for list caches
-      for await (const key of redisClient.scanIterator({ MATCH: "products:*:*:lite" })) {
-        await redisClient.del(key).catch(() => {});
+      // Fetch each product to get collection/category info for explicit cache invalidation
+      for (const item of enrichedItems) {
+        try {
+          const product = await Product.findOne({ id: item.productId }).lean();
+          if (product) {
+            // Add product detail cache key
+            keysToDelete.add(`product:detail:${product.id}`);
+            keysToDelete.add(`product:detail:${product._id}`);
+
+            // Add collection/category specific cache keys
+            const collectionName = product.collectionInfo?.name || '';
+            const categoryName = product.categoryInfo?.name || '';
+            const collectionId = String(product.collectionInfo?.id || product.collectionInfo?._id || '');
+            const categoryId = String(product.categoryInfo?.id || product.categoryInfo?._id || '');
+
+            if (collectionName && categoryName) {
+              keysToDelete.add(`products:${collectionName.toLowerCase()}:${categoryName.toLowerCase()}:lite`);
+            }
+            if (collectionId) keysToDelete.add(`products:collection:${collectionId}`);
+            if (categoryId) keysToDelete.add(`products:category:${categoryId}`);
+            if (collectionName) keysToDelete.add(`collectionProducts:${collectionName.toLowerCase()}:lite`);
+          }
+        } catch (err) {
+          console.warn('Failed to fetch product for cache invalidation', item.productId, err?.message || err);
+        }
+      }
+
+      // Delete all explicit keys at once
+      const keysArray = Array.from(keysToDelete).filter(Boolean);
+      if (keysArray.length > 0) {
+        await redisClient.del(...keysArray).catch(() => {});
+      }
+
+      // Sweep any stale product detail caches matching product id or mongo _id
+      try {
+        for (const item of enrichedItems) {
+          const product = await Product.findOne({ id: item.productId }).lean();
+          if (!product) continue;
+          const pidStr = String(product.id || '');
+          const mongoIdStr = String(product._id || '');
+
+          if (pidStr) {
+            for await (const key of redisClient.scanIterator({ MATCH: `product:detail:*${pidStr}*` })) {
+              await redisClient.del(key).catch(() => {});
+            }
+          }
+          if (mongoIdStr) {
+            for await (const key of redisClient.scanIterator({ MATCH: `product:detail:*${mongoIdStr}*` })) {
+              await redisClient.del(key).catch(() => {});
+            }
+          }
+        }
+      } catch (sweepErr) {
+        console.warn('Failed sweeping product detail keys after order creation:', sweepErr?.message || sweepErr);
+      }
+
+      // Pattern-based sweep as safety net for any remaining list caches
+      try {
+        for await (const key of redisClient.scanIterator({ MATCH: "products:*" })) {
+          await redisClient.del(key).catch(() => {});
+        }
+        for await (const key of redisClient.scanIterator({ MATCH: "collectionProducts:*" })) {
+          await redisClient.del(key).catch(() => {});
+        }
+      } catch (scanErr) {
+        console.warn('Pattern-based cache sweep had issues', scanErr?.message || scanErr);
       }
     } catch (err) { console.warn("Cache invalidation error", err); }
 
