@@ -80,8 +80,8 @@ export const createOrder = async (req, res) => {
         return res.status(400).json({ error: `Invalid item details` });
       }
 
-      const product = await Product.findOne({ id: productId, status: 'active' }).lean();
-      if (!product) return res.status(404).json({ error: `Product ${productId} not found or unavailable` });
+      const product = await Product.findOne({ id: productId }).lean();
+      if (!product) return res.status(404).json({ error: `Product ${productId} not found` });
 
       const variant = product.variants?.find(v => v.id === variantId);
       const sizeObj = variant?.sizes?.find(s => s.size === size);
@@ -155,7 +155,22 @@ if (discType === 'percentage' && discValue > 0) {
       status: "Placed", shippingAddress, tracking: [{ status: "Order Placed", date: today() }]
     });
 
-    // Update coupon usage (if any) BEFORE finalizing response
+    // Create invoice record (immutable) for this order
+    try {
+      const { createInvoiceForOrder } = await import('./invoiceController.js');
+      const invoice = await createInvoiceForOrder({ order });
+      // Attach invoice to response for immediate use
+      // Note: invoice is stored separately and cannot be changed once created
+      // Invalidate any invoice caches if implemented (none yet)
+      
+      // include invoice reference and shipping for easier frontend consumption
+      return res.status(201).json({ success: true, order, invoice, shipping: order.shipping });
+    } catch (invErr) {
+      console.warn('Invoice creation failed', invErr);
+      return res.status(201).json({ success: true, order, shipping: order.shipping });
+    }
+
+    // Update coupon usage
     if (couponCode) {
       await Coupon.findOneAndUpdate(
         { code: couponCode },
@@ -188,118 +203,44 @@ if (discType === 'percentage' && discValue > 0) {
           }
         ],
         { new: true, updatePipeline: true }
-      ).catch(() => {});
+      );
     }
 
-    // REDUCE STOCK & INCREMENT SALES — do this before returning
+    // ✅ REDUCE STOCK & INCREMENT SALES
     for (const item of enrichedItems) {
-      try {
-        // Use arrayFilters to atomically decrement the correct nested size stock
-        const res = await Product.updateOne(
-          { id: item.productId },
-          {
-            $inc: { 'variants.$[v].sizes.$[s].stock': -Number(item.quantity || 0), salesCount: Number(item.quantity || 0) }
-          },
-          {
-            arrayFilters: [ { 'v.id': Number(item.variantId) }, { 's.size': String(item.size) } ]
-          }
-        );
-
-        if (!res || res.matchedCount === 0) {
-          console.warn('Stock update did not match product', item.productId);
+      const product = await Product.findOne({ id: item.productId });
+      if (product) {
+        const variant = product.variants?.find(v => v.id == item.variantId);
+        if (variant) {
+          const sizeObj = variant.sizes?.find(s => s.size.toLowerCase() === item.size.toLowerCase());
+          if (sizeObj) sizeObj.stock = Math.max(0, sizeObj.stock - item.quantity);
         }
-      } catch (err) {
-        console.warn('Failed to update product stock for', item.productId, err?.message || err);
+        product.salesCount = (product.salesCount || 0) + item.quantity;
+        await product.save();
       }
     }
 
-    // CLEAR CART & INVALIDATE USER ORDERS CACHE
+    // ✅ CLEAR CART & INVALIDATE USER ORDERS CACHE
     await redisClient.del(`cart:user:${userId}`).catch(() => {});
-    await User.findOneAndUpdate({ id: userId }, { $set: { cart: [] } }).catch(() => {});
+    await redisClient.del(`product:detail:${item.productId}`).catch(() => {});
+    await User.findOneAndUpdate({ id: userId }, { $set: { cart: [] } });
     await redisClient.del(`orders:user:${userId}`).catch(() => {});
 
-    // PRODUCT CACHE INVALIDATION — Fetch product details to build explicit cache keys
+    // ✅ PRODUCT CACHE INVALIDATION (Sync with productController keys)
     try {
-      const keysToDelete = new Set(["products:all", "products:featured"]);
-
-      // Fetch each product to get collection/category info for explicit cache invalidation
+      const keysToInvalidate = ["products:all", "products:featured"];
       for (const item of enrichedItems) {
-        try {
-          const product = await Product.findOne({ id: item.productId }).lean();
-          if (product) {
-            // Add product detail cache key
-            keysToDelete.add(`product:detail:${product.id}`);
-            keysToDelete.add(`product:detail:${product._id}`);
-
-            // Add collection/category specific cache keys
-            const collectionName = product.collectionInfo?.name || '';
-            const categoryName = product.categoryInfo?.name || '';
-            const collectionId = String(product.collectionInfo?.id || product.collectionInfo?._id || '');
-            const categoryId = String(product.categoryInfo?.id || product.categoryInfo?._id || '');
-
-            if (collectionName && categoryName) {
-              keysToDelete.add(`products:${collectionName.toLowerCase()}:${categoryName.toLowerCase()}:lite`);
-            }
-            if (collectionId) keysToDelete.add(`products:collection:${collectionId}`);
-            if (categoryId) keysToDelete.add(`products:category:${categoryId}`);
-            if (collectionName) keysToDelete.add(`collectionProducts:${collectionName.toLowerCase()}:lite`);
-          }
-        } catch (err) {
-          console.warn('Failed to fetch product for cache invalidation', item.productId, err?.message || err);
-        }
+        keysToInvalidate.push(`product:detail:${item.productId}`);
       }
-
-      // Delete all explicit keys at once
-      const keysArray = Array.from(keysToDelete).filter(Boolean);
-      if (keysArray.length > 0) {
-        await redisClient.del(...keysArray).catch(() => {});
-      }
-
-      // Sweep any stale product detail caches matching product id or mongo _id
-      try {
-        for (const item of enrichedItems) {
-          const product = await Product.findOne({ id: item.productId }).lean();
-          if (!product) continue;
-          const pidStr = String(product.id || '');
-          const mongoIdStr = String(product._id || '');
-
-          if (pidStr) {
-            for await (const key of redisClient.scanIterator({ MATCH: `product:detail:*${pidStr}*` })) {
-              await redisClient.del(key).catch(() => {});
-            }
-          }
-          if (mongoIdStr) {
-            for await (const key of redisClient.scanIterator({ MATCH: `product:detail:*${mongoIdStr}*` })) {
-              await redisClient.del(key).catch(() => {});
-            }
-          }
-        }
-      } catch (sweepErr) {
-        console.warn('Failed sweeping product detail keys after order creation:', sweepErr?.message || sweepErr);
-      }
-
-      // Pattern-based sweep as safety net for any remaining list caches
-      try {
-        for await (const key of redisClient.scanIterator({ MATCH: "products:*" })) {
-          await redisClient.del(key).catch(() => {});
-        }
-        for await (const key of redisClient.scanIterator({ MATCH: "collectionProducts:*" })) {
-          await redisClient.del(key).catch(() => {});
-        }
-      } catch (scanErr) {
-        console.warn('Pattern-based cache sweep had issues', scanErr?.message || scanErr);
-      }
+      const kd = keysToInvalidate.filter(Boolean);
+      if (kd.length) await redisClient.del(...kd).catch(() => {});
+      
+      // Pattern delete for list caches
+      const stream = redisClient.scanIterator({ MATCH: "products:*:*:lite" });
+      for await (const key of stream) await redisClient.del(key);
     } catch (err) { console.warn("Cache invalidation error", err); }
 
-    // Create invoice record (immutable) for this order and then return
-    try {
-      const { createInvoiceForOrder } = await import('./invoiceController.js');
-      const invoice = await createInvoiceForOrder({ order });
-      return res.status(201).json({ success: true, order, invoice, shipping: order.shipping });
-    } catch (invErr) {
-      console.warn('Invoice creation failed', invErr);
-      return res.status(201).json({ success: true, order, shipping: order.shipping });
-    }
+    // unreachable (response returned above after invoice creation)
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }
