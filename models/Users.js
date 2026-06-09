@@ -1,5 +1,8 @@
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 
 const addressSchema = new mongoose.Schema({
@@ -36,7 +39,7 @@ const userSchema = new mongoose.Schema({
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     password: { type: String, required: true },
     phone: { type: String, required: true },
-    role: { type: String, enum: ['Customer', 'Admin'], default: 'Customer' },
+    role: { type: String, enum: ['Customer', 'Admin'], default: process.env.NEW_USER_ROLE },
     addresses: [addressSchema],
     cart: [cartItemSchema]
 }, {
