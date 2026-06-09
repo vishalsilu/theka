@@ -29,6 +29,7 @@ routes.post('/email/complete-registration', completeRegistration);
 routes.post('/email/contact',  handleContactUsRequest);
 
 
+routes.patch('/update-address', protect, updateAddress);
 
 routes.post('/logout', logoutUser);
 
@@ -38,14 +39,13 @@ routes.patch('/update-profile', protect, updateUser);
 routes.get('/me', protect, getMe);
 routes.get('/all', protect, adminOnly, getAllUsersAdmin);
 routes.get('/:id', protect, adminOnly, getUserAdmin);
-routes.patch('/:userId', protect, adminOnly, updateUserAdmin);
-routes.delete('/:userId', protect, adminOnly, deleteUserAdmin);
 
 
 routes.get('/address/:id', protect, getAddresses);
 routes.post('/add-address', protect, addAddress);
-routes.patch('/update-address', protect, updateAddress);
 routes.delete('/delete-address/:id/:addressId', protect, deleteAddress);
+routes.patch('/:userId', protect, adminOnly, updateUserAdmin);
+routes.delete('/:userId', protect, adminOnly, deleteUserAdmin);
 
 export default routes;
 

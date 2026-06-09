@@ -155,22 +155,7 @@ if (discType === 'percentage' && discValue > 0) {
       status: "Placed", shippingAddress, tracking: [{ status: "Order Placed", date: today() }]
     });
 
-    // Create invoice record (immutable) for this order
-    try {
-      const { createInvoiceForOrder } = await import('./invoiceController.js');
-      const invoice = await createInvoiceForOrder({ order });
-      // Attach invoice to response for immediate use
-      // Note: invoice is stored separately and cannot be changed once created
-      // Invalidate any invoice caches if implemented (none yet)
-      
-      // include invoice reference and shipping for easier frontend consumption
-      return res.status(201).json({ success: true, order, invoice, shipping: order.shipping });
-    } catch (invErr) {
-      console.warn('Invoice creation failed', invErr);
-      return res.status(201).json({ success: true, order, shipping: order.shipping });
-    }
-
-    // Update coupon usage
+    // Update coupon usage (if any) BEFORE finalizing response
     if (couponCode) {
       await Coupon.findOneAndUpdate(
         { code: couponCode },
@@ -203,43 +188,58 @@ if (discType === 'percentage' && discValue > 0) {
           }
         ],
         { new: true, updatePipeline: true }
-      );
+      ).catch(() => {});
     }
 
-    // ✅ REDUCE STOCK & INCREMENT SALES
+    // REDUCE STOCK & INCREMENT SALES — do this before returning
     for (const item of enrichedItems) {
-      const product = await Product.findOne({ id: item.productId });
-      if (product) {
-        const variant = product.variants?.find(v => v.id == item.variantId);
-        if (variant) {
-          const sizeObj = variant.sizes?.find(s => s.size.toLowerCase() === item.size.toLowerCase());
-          if (sizeObj) sizeObj.stock = Math.max(0, sizeObj.stock - item.quantity);
+      try {
+        // Use arrayFilters to atomically decrement the correct nested size stock
+        const res = await Product.updateOne(
+          { id: item.productId },
+          {
+            $inc: { 'variants.$[v].sizes.$[s].stock': -Number(item.quantity || 0), salesCount: Number(item.quantity || 0) }
+          },
+          {
+            arrayFilters: [ { 'v.id': Number(item.variantId) }, { 's.size': String(item.size) } ]
+          }
+        );
+
+        if (!res || res.matchedCount === 0) {
+          console.warn('Stock update did not match product', item.productId);
         }
-        product.salesCount = (product.salesCount || 0) + item.quantity;
-        await product.save();
+      } catch (err) {
+        console.warn('Failed to update product stock for', item.productId, err?.message || err);
       }
     }
 
-    // ✅ CLEAR CART & INVALIDATE USER ORDERS CACHE
+    // CLEAR CART & INVALIDATE USER ORDERS CACHE
     await redisClient.del(`cart:user:${userId}`).catch(() => {});
-    await User.findOneAndUpdate({ id: userId }, { $set: { cart: [] } });
+    await User.findOneAndUpdate({ id: userId }, { $set: { cart: [] } }).catch(() => {});
     await redisClient.del(`orders:user:${userId}`).catch(() => {});
 
-    // ✅ PRODUCT CACHE INVALIDATION (Sync with productController keys)
+    // PRODUCT CACHE INVALIDATION (SYNC WITH productController keys)
     try {
       const keysToInvalidate = ["products:all", "products:featured"];
-      for (const item of enrichedItems) {
-        keysToInvalidate.push(`product:detail:${item.productId}`);
-      }
+      for (const item of enrichedItems) keysToInvalidate.push(`product:detail:${item.productId}`);
       const kd = keysToInvalidate.filter(Boolean);
       if (kd.length) await redisClient.del(...kd).catch(() => {});
-      
+
       // Pattern delete for list caches
-      const stream = redisClient.scanIterator({ MATCH: "products:*:*:lite" });
-      for await (const key of stream) await redisClient.del(key);
+      for await (const key of redisClient.scanIterator({ MATCH: "products:*:*:lite" })) {
+        await redisClient.del(key).catch(() => {});
+      }
     } catch (err) { console.warn("Cache invalidation error", err); }
 
-    // unreachable (response returned above after invoice creation)
+    // Create invoice record (immutable) for this order and then return
+    try {
+      const { createInvoiceForOrder } = await import('./invoiceController.js');
+      const invoice = await createInvoiceForOrder({ order });
+      return res.status(201).json({ success: true, order, invoice, shipping: order.shipping });
+    } catch (invErr) {
+      console.warn('Invoice creation failed', invErr);
+      return res.status(201).json({ success: true, order, shipping: order.shipping });
+    }
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }

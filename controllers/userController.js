@@ -616,6 +616,7 @@ export const addAddress = async (req, res) => {
 export const updateAddress = async (req, res) => {
     try {
         const { _id, userId, ...updatedAddressData } = req.body;
+        console.log("Received updateAddress request with data:", req.body);
         if (!userId) return res.status(401).json({ error: "Please login again" });
 
         const currentUser = await User.findOne({ id: userId });
