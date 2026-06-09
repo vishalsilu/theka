@@ -191,7 +191,50 @@ export const putCart = async (req, res) => {
         const userId = parseJwtUserId(req.headers.authorization);
         let cartToken = String(req.headers['x-cart-token'] || '').trim();
         
-        const finalItems = sanitizeThinCart(req.body?.items);
+        const requestedItems = sanitizeThinCart(req.body?.items);
+        
+        // VALIDATE STOCK BEFORE SAVING — Fetch products and check available stock
+        const validatedItems = [];
+        const productIds = [...new Set(requestedItems.map(i => i.productId))];
+        
+        if (productIds.length > 0) {
+            const products = await Product.find({ id: { $in: productIds } }).lean();
+            
+            for (const item of requestedItems) {
+                const product = products.find(p => p.id === item.productId);
+                
+                if (!product) {
+                    // Skip items where product no longer exists
+                    continue;
+                }
+                
+                const variant = product.variants?.find(v => v.id === item.variantId);
+                if (!variant) {
+                    // Skip items where variant no longer exists
+                    continue;
+                }
+                
+                const sizeInfo = variant.sizes?.find(s => s.size === item.size);
+                const availableStock = sizeInfo?.stock || 0;
+                
+                if (availableStock <= 0) {
+                    // Skip out-of-stock items
+                    continue;
+                }
+                
+                // Enforce stock limit: cap quantity at available stock (but also respect max 10 per item)
+                const validatedQuantity = Math.min(item.quantity, availableStock, 10);
+                
+                validatedItems.push({
+                    productId: item.productId,
+                    variantId: item.variantId,
+                    size: item.size,
+                    quantity: validatedQuantity
+                });
+            }
+        }
+        
+        const finalItems = sanitizeThinCart(validatedItems);
         
         if (userId) {
             // 1. Save to Redis instantly (keeps app responsive)
