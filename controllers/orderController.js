@@ -215,7 +215,13 @@ if (discType === 'percentage' && discValue > 0) {
 
     // CLEAR CART & INVALIDATE USER ORDERS CACHE
     await redisClient.del(`cart:user:${userId}`).catch(() => {});
-    await redisClient.del(`product:detail:${item.productId}`).catch(() => {});
+    // Delete product detail caches for all items in this order (avoid referencing a single `item` variable)
+    try {
+      const productDetailKeys = enrichedItems.map(i => `product:detail:${i.productId}`).filter(Boolean);
+      if (productDetailKeys.length) await redisClient.del(...productDetailKeys).catch(() => {});
+    } catch (e) {
+      // best-effort cache invalidation; ignore failures
+    }
     await User.findOneAndUpdate({ id: userId }, { $set: { cart: [] } }).catch(() => {});
     await redisClient.del(`orders:user:${userId}`).catch(() => {});
 

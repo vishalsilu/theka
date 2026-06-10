@@ -5,6 +5,7 @@ import {
   createSiteData,
   updateSiteData,
   uploadSiteDataImage,
+  confirmSiteDataUpdate,
 } from "../controllers/siteDataController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { adminOnly } from "../middleware/adminMiddleware.js";
@@ -14,6 +15,7 @@ const router = express.Router();
 router.get("/", getSiteData);
 router.post("/", protect, adminOnly, createSiteData);
 router.patch("/", protect, adminOnly, updateSiteData);
+router.post("/confirm", protect, adminOnly, confirmSiteDataUpdate);
 router.post("/upload", protect, adminOnly, upload.single('image'), uploadSiteDataImage);
 
 export default router;
