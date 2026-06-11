@@ -17,7 +17,7 @@ export const debounceCartSync = (userId) => {
     // 2. Start a fresh 5-second countdown
     const timer = setTimeout(async () => {
         try {
-            console.log(`⚡ User ${userId} stopped changing items. Syncing immediately to MongoDB...`);
+            // console.log(`⚡ User ${userId} stopped changing items. Syncing immediately to MongoDB...`);
             
             // Fetch the absolute latest state from Redis to save to MongoDB
             const cartData = await redisClient.get(`cart:user:${userId}`);
@@ -31,7 +31,7 @@ export const debounceCartSync = (userId) => {
                 
                 // Clean up the Redis dirty tracking flag
                 await redisClient.sRem('dirty_carts', userId);
-                console.log(`✅ MongoDB sync complete for user: ${userId}`);
+                // console.log(`✅ MongoDB sync complete for user: ${userId}`);
             }
         } catch (err) {
             console.error(`❌ Real-time Sync Error for user ${userId}:`, err);

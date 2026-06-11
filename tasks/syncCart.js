@@ -4,7 +4,7 @@ import { redisClient } from "../config/redis.js";
 import User from "../models/Users.js";
 
 const startCartSync = () => {
-    console.log("⏰ Cart Sync Scheduler Initialized...");
+    // console.log("⏰ Cart Sync Scheduler Initialized...");
     
     cron.schedule('*/1 * * * *', async () => {
         try {
@@ -12,7 +12,7 @@ const startCartSync = () => {
             const dirtyUsers = await redisClient.sMembers('dirty_carts');
             if (dirtyUsers.length === 0) return;
 
-            console.log(`🔄 Syncing ${dirtyUsers.length} dirty carts...`);
+            // console.log(`🔄 Syncing ${dirtyUsers.length} dirty carts...`);
             console.time('🎯 Sync Performance');
 
             // 2. Fetch all cart data from Redis concurrently
@@ -46,7 +46,7 @@ const startCartSync = () => {
             }
 
             console.timeEnd('🎯 Sync Performance');
-            console.log(`✅ Successfully synced ${bulkOps.length} carts.`);
+            // console.log(`✅ Successfully synced ${bulkOps.length} carts.`);
 
         } catch (err) {
             console.error("❌ Sync Error:", err);

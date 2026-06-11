@@ -85,6 +85,11 @@ const productSchema = new mongoose.Schema({
         when: { type: String },
         note: { type: String }
     }]
+    ,
+    // --- Sponsorship / Promotion ---
+    isSponsored: { type: Boolean, default: false },
+    sponsorPriority: { type: Number, default: 0 }, // higher means more prominent
+    sponsorUntil: { type: Date, default: null }
 }, { 
     timestamps: true,
     toJSON: { virtuals: true },
@@ -127,6 +132,7 @@ productSchema.virtual('inStock').get(function() {
 productSchema.index({ "collectionInfo.name": 1 }); 
 productSchema.index({ fit: 1 }); // Indexing fit for faster filtering
 productSchema.index({ salesCount: -1 });
+productSchema.index({ isSponsored: -1, sponsorPriority: -1 });
 
 const Product = mongoose.model("Product", productSchema);
 

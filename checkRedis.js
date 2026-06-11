@@ -20,12 +20,10 @@ client.on('error', (err) => {
 const runCheck = async () => {
   try {
     await client.connect();
-    console.log('✅ Connected to Redis');
 
     await client.set('check-redis', 'ok');
     const value = await client.get('check-redis');
 
-    console.log('✅ Redis set/get successful:', value);
   } catch (error) {
     console.error('❌ Redis check failed:', error);
     process.exit(1);

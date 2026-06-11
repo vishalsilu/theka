@@ -4,6 +4,7 @@ import {
     createProduct,
     getFeaturedProducts,
     getProductsByCategory,
+    setProductSponsorship,
     updateProduct,
     deleteProduct,
     getSpecificProduct,
@@ -23,6 +24,7 @@ router.post("/", protect, adminOnly, upload.array("images", 12), createProduct);
 router.get("/featured", getFeaturedProducts);
 router.get("/type/:type", getProductsByCollection);
 router.get("/:type/:category", getProductsByCategory);
+router.patch("/:id/sponsor", protect, adminOnly, setProductSponsorship);
 router.post("/:id/reviews", protect, upload.array("images", 5), addProductReview);
 router.put("/:id", protect, adminOnly, upload.array("images", 12), updateProduct);
 router.patch("/:id/reviews/:reviewId", protect, upload.array("images", 5), updateProductReview);

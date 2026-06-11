@@ -9,7 +9,7 @@ const syncCartsToMongo = async () => {
         
         if (dirtyUserIds.length === 0) return;
 
-        console.log(`--- Starting Sync for ${dirtyUserIds.length} carts ---`);
+        // console.log(`--- Starting Sync for ${dirtyUserIds.length} carts ---`);
 
         for (const userId of dirtyUserIds) {
             // 2. Fetch the "Thin" cart from Redis
@@ -29,7 +29,7 @@ const syncCartsToMongo = async () => {
             await redisClient.sRem('dirty_carts', userId);
         }
 
-        console.log(`--- Sync Complete ---`);
+        // console.log(`--- Sync Complete ---`);
     } catch (error) {
         console.error("CRON Sync Error:", error);
     }
@@ -41,6 +41,6 @@ export const startCartSyncCron = () => {
     cron.schedule('*/10 * * * *', () => {
         syncCartsToMongo();
     });
-    console.log("✅ Cart Sync Cron started - runs every 10 minutes");
+    // console.log("✅ Cart Sync Cron started - runs every 10 minutes");
 };
 

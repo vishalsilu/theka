@@ -347,9 +347,12 @@ export const getProductsByCollection = async (req, res) => {
             {
                 name: 1, id: 1, price: 1, discount: 1, fabric: 1,
                 pattern: 1, fit: 1, salesCount: 1, isTrending: 1, createdAt: 1,
-                variants: 1, categoryInfo: 1
+                variants: 1, categoryInfo: 1,
+                isSponsored: 1, sponsorPriority: 1, sponsorUntil: 1
             }
         ).lean();
+
+        const now = new Date();
 
         const products = productsRaw.map(product => {
             const originalPrice = product.price || 0;
@@ -398,8 +401,21 @@ export const getProductsByCollection = async (req, res) => {
                 inStock: variants.some(v => v.inStock),
                 thumbnail: defaultVariant?.images?.[0] || null,
                 salesCount: product.salesCount,
-                createdAt: product.createdAt
+                createdAt: product.createdAt,
+                // pass-through sponsorship metadata for UI
+                isSponsored: !!product.isSponsored,
+                sponsorPriority: product.sponsorPriority || 0,
+                sponsorUntil: product.sponsorUntil || null
             };
+        });
+
+        // Sort sponsored products first and by priority, but only consider active sponsorships
+        products.sort((a, b) => {
+            const aActive = a.isSponsored && (!a.sponsorUntil || new Date(a.sponsorUntil) > now) ? 1 : 0;
+            const bActive = b.isSponsored && (!b.sponsorUntil || new Date(b.sponsorUntil) > now) ? 1 : 0;
+            if (aActive !== bActive) return bActive - aActive;
+            if (a.sponsorPriority !== b.sponsorPriority) return b.sponsorPriority - a.sponsorPriority;
+            return new Date(b.createdAt) - new Date(a.createdAt);
         });
 
         await redisClient.setEx(cacheKey, 10800, JSON.stringify(products));
@@ -440,7 +456,8 @@ export const getProductsByCategory = async (req, res) => {
             {
                 name: 1, id: 1, price: 1, discount: 1, fabric: 1,
                 pattern: 1, fit: 1, salesCount: 1, isTrending: 1, createdAt: 1,
-                variants: 1
+                variants: 1,
+                isSponsored: 1, sponsorPriority: 1, sponsorUntil: 1
             }
         ).lean();
 
@@ -487,8 +504,21 @@ export const getProductsByCategory = async (req, res) => {
                 inStock: variants.some(v => v.inStock),
                 thumbnail: defaultVariant?.images?.[0] || null,
                 salesCount: product.salesCount,
-                createdAt: product.createdAt
+                createdAt: product.createdAt,
+                isSponsored: !!product.isSponsored,
+                sponsorPriority: product.sponsorPriority || 0,
+                sponsorUntil: product.sponsorUntil || null
             };
+        });
+
+        // Sort sponsored products first and by priority
+        const now2 = new Date();
+        products.sort((a, b) => {
+            const aActive = a.isSponsored && (!a.sponsorUntil || new Date(a.sponsorUntil) > now2) ? 1 : 0;
+            const bActive = b.isSponsored && (!b.sponsorUntil || new Date(b.sponsorUntil) > now2) ? 1 : 0;
+            if (aActive !== bActive) return bActive - aActive;
+            if (a.sponsorPriority !== b.sponsorPriority) return b.sponsorPriority - a.sponsorPriority;
+            return new Date(b.createdAt) - new Date(a.createdAt);
         });
 
         await redisClient.setEx(cacheKey, 10800, JSON.stringify(products));
@@ -497,6 +527,40 @@ export const getProductsByCategory = async (req, res) => {
     } catch (error) {
 
         res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+
+// Admin: Set or clear sponsorship for a product
+export const setProductSponsorship = async (req, res) => {
+    try {
+        const { id } = req.params; // supports custom id or mongo _id
+        const { isSponsored, sponsorPriority, sponsorUntil } = req.body;
+
+        const update = {};
+        if (typeof isSponsored !== 'undefined') update.isSponsored = !!isSponsored;
+        if (typeof sponsorPriority !== 'undefined') update.sponsorPriority = Number(sponsorPriority) || 0;
+        if (typeof sponsorUntil !== 'undefined') update.sponsorUntil = sponsorUntil ? new Date(sponsorUntil) : null;
+
+        const query = [{ id }];
+        if (mongoose.Types.ObjectId.isValid(id)) query.push({ _id: id });
+
+        const product = await Product.findOneAndUpdate({ $or: query }, { $set: update }, { new: true }).lean();
+        if (!product) return res.status(404).json({ error: 'Product not found' });
+
+        // Invalidate product lists and detail caches
+        await safeRedisDel(`product:detail:${product._id}`, `product:detail:${product.id}`);
+        await invalidateProductCache({
+            categoryId: normalizeCacheId(product.categoryInfo?.id || product.categoryInfo?._id),
+            collectionId: normalizeCacheId(product.collectionInfo?.id || product.collectionInfo?._id),
+            categoryName: product.categoryInfo?.name,
+            collectionName: product.collectionInfo?.name,
+            productId: product.id
+        });
+
+        res.status(200).json({ success: true, data: product });
+    } catch (error) {
+        console.error('Set Sponsorship Failure:', error);
+        res.status(500).json({ error: error.message });
     }
 };
 
@@ -956,7 +1020,7 @@ export const updateProduct = async (req, res) => {
         );
 
         // Invalidate individual product detail cache immediately
-        await safeRedisDel(`product:detail:${id}`);
+        await safeRedisDel(`product:detail:${id}`, `product:detail:${updatedProduct?._id || ''}`, `product:detail:${updatedProduct?.id || ''}`);
         await safeRedisDel("products:featured", "products:all");
 
         // Remove any images that existed previously but are not present in the updated product.
@@ -1119,7 +1183,7 @@ export const getAllProducts = async (req, res) => {
         if (cached) return res.status(200).json(JSON.parse(cached));
 
         const productsRaw = await Product.find({})
-            .select("name id price discount fabric pattern fit salesCount isTrending createdAt variants type description categoryInfo collectionInfo isFeatured sizeType deal" ) 
+            .select("name id price discount fabric pattern fit salesCount isTrending createdAt variants type description categoryInfo collectionInfo isFeatured sizeType isSponsored sponsorPriority deal sponsorUntil" ) 
             .lean();
 
         // 2. Transform data shapes safely for your frontend layout components
@@ -1173,7 +1237,11 @@ export const getAllProducts = async (req, res) => {
                 isFeatured: product.isFeatured || false,
                 discount: product.discount || null,
                 sizeType: product.sizeType ,
-                deal : product.deal || null // Include full variant details for your frontend to utilize as needed
+                deal : product.deal || null,
+                sponsorPriority: product.sponsorPriority || null,
+                sponsorUntil: product.sponsorUntil || null,
+                isSponsored: product.isSponsored || false,
+                // Include full variant details for your frontend to utilize as needed
             };
         });
 

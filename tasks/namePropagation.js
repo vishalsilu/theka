@@ -51,7 +51,6 @@ const processPropagationJob = async (jobKey, jobValue) => {
 };
 
 const startNamePropagation = () => {
-    console.log('⏰ Name Propagation Scheduler Initialized...');
 
     cron.schedule('*/30 * * * * *', async () => {
         try {
