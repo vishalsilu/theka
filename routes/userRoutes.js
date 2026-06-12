@@ -10,6 +10,7 @@ import {
     requestEmailOTP,
     verifyEmailOTP,
     completeRegistration,
+    checkAuthIdentity,
     getAllUsersAdmin,
     getUserAdmin,
     updateUserAdmin,
@@ -22,6 +23,7 @@ import { otpLimiter } from "../middleware/otpLimiter.js";
 
 const routes = express.Router()
 
+routes.post('/email/check-identity', checkAuthIdentity);
 routes.post('/email/send-otp', otpLimiter, requestEmailOTP);
 routes.post('/email/verify-otp', verifyEmailOTP);
 routes.post('/email/complete-registration', completeRegistration);

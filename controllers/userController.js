@@ -245,6 +245,80 @@ export const handleContactUsRequest = async (req, res) => {
     }
 };
 
+export const checkAuthIdentity = async (req, res) => {
+    try {
+        const { mode, identifierType, email, phone, adminLogin } = req.body;
+
+        if (!mode || !['login', 'register'].includes(mode)) {
+            return res.status(400).json({ error: 'Auth mode must be either login or register.' });
+        }
+
+        if (!identifierType || !['email', 'phone'].includes(identifierType)) {
+            return res.status(400).json({ error: 'Identifier type must be email or phone.' });
+        }
+
+        const normalizedEmail = email ? String(email).trim().toLowerCase() : '';
+        const normalizedPhone = phone ? String(phone).trim() : '';
+
+        if (identifierType === 'email' && !normalizedEmail) {
+            return res.status(400).json({ error: 'Email is required for email authentication.' });
+        }
+
+        if (identifierType === 'phone' && !normalizedPhone) {
+            return res.status(400).json({ error: 'Phone number is required for phone authentication.' });
+        }
+
+        const existingUser = identifierType === 'email'
+            ? await User.findOne({ email: normalizedEmail })
+            : await User.findOne({ phone: normalizedPhone });
+
+        if (mode === 'login') {
+            if (!existingUser) {
+                return res.status(404).json({ error: `No account found with this ${identifierType}.` });
+            }
+
+            if (adminLogin && existingUser.role !== 'Admin') {
+                return res.status(403).json({ error: 'Invalid admin user.' });
+            }
+
+            if (!req.body.password || !String(req.body.password).trim()) {
+                return res.status(400).json({ error: 'Password is required for login.' });
+            }
+
+            const passwordMatches = await existingUser.comparePassword(String(req.body.password).trim());
+            if (!passwordMatches) {
+                return res.status(401).json({ error: 'Incorrect password.' });
+            }
+
+            return res.status(200).json({
+                success: true,
+                exists: true,
+                email: existingUser.email,
+                phone: existingUser.phone,
+                role: existingUser.role,
+                message: 'Account found.'
+            });
+        }
+
+        if (mode === 'register') {
+            if (existingUser) {
+                return res.status(409).json({ error: `This ${identifierType} is already registered.` });
+            }
+
+            return res.status(200).json({
+                success: true,
+                exists: false,
+                message: 'This identifier is available for registration.'
+            });
+        }
+
+        return res.status(400).json({ error: 'Invalid auth check request.' });
+    } catch (error) {
+        console.error('Auth identity check error:', error);
+        return res.status(500).json({ error: 'Internal server error during identity verification.' });
+    }
+};
+
 export const requestEmailOTP = async (req, res) => {
     try {
         
@@ -368,44 +442,57 @@ export const requestEmailOTP = async (req, res) => {
  */
 export const verifyEmailOTP = async (req, res) => {
     try {
-        const { email, otp, adminLogin } = req.body;
+        const { email, phone, identifierType, otp, adminLogin, mode } = req.body;
 
-        if (!email || !otp) {
-            return res.status(400).json({ error: "Email and verification OTP parameters are required" });
+        if (!otp) {
+            return res.status(400).json({ error: "OTP code is required." });
         }
 
-        const normalizedEmail = String(email).trim().toLowerCase();
-        const cacheKey = `otp:email:${normalizedEmail}`;
+        const normalizedEmail = email ? String(email).trim().toLowerCase() : '';
+        const normalizedPhone = phone ? String(phone).trim() : '';
 
-        // 1. Fetch code from Redis cache memory cell
+        let lookupEmail = normalizedEmail;
+        let user = null;
+
+        if (identifierType === 'phone') {
+            if (!normalizedPhone) {
+                return res.status(400).json({ error: 'Phone is required when using phone authentication.' });
+            }
+            user = await User.findOne({ phone: normalizedPhone });
+            if (user) {
+                lookupEmail = user.email;
+            }
+        }
+
+        if (!lookupEmail) {
+            return res.status(400).json({ error: 'Email is required for OTP validation.' });
+        }
+
+        const cacheKey = `otp:email:${lookupEmail}`;
         const cachedOtp = await redisClient.get(cacheKey);
 
         if (!cachedOtp) {
             return res.status(400).json({ error: "Your verification code has expired or was never requested. Click resend." });
         }
 
-        // 2. Validate user entry against stored token string explicitly
         if (cachedOtp !== String(otp).trim()) {
             return res.status(400).json({ error: "Incorrect OTP entered. Please check your inbox and try again." });
         }
 
-        // 3. Clean up the cache key immediately to prevent reuse injection vectors
         await redisClient.del(cacheKey);
 
-        // 4. Look up existing profile index paths
-        let user = await User.findOne({ email: normalizedEmail });
+        if (!user) {
+            user = await User.findOne({ email: lookupEmail });
+        }
 
         if (!user) {
-            if (adminLogin) {
-                return res.status(403).json({ error: 'Invalid admin user' });
+            if (adminLogin || mode === 'login') {
+                return res.status(404).json({ error: 'Account does not exist. Please register first.' });
             }
 
-            // 🌟 Flow B: First-time Registration Path -> Tell Frontend to Ask for Details
-            // Generate a short-lived token (valid for 15 mins) containing the verified email
-            // This prevents users from fabricating or modifying emails during step 2
             const registrationToken = jwt.sign(
-                { email: normalizedEmail }, 
-                process.env.JWT_SECRET, 
+                { email: lookupEmail },
+                process.env.JWT_SECRET,
                 { expiresIn: '15m' }
             );
 
@@ -413,7 +500,7 @@ export const verifyEmailOTP = async (req, res) => {
                 success: true,
                 registrationRequired: true,
                 message: "Email verified successfully! Please complete your registration profile details.",
-                registrationToken // Send this back so frontend can pass it back in the next step
+                registrationToken
             });
         }
 
@@ -421,7 +508,6 @@ export const verifyEmailOTP = async (req, res) => {
             return res.status(403).json({ error: 'Invalid admin user' });
         }
 
-        // 🌟 Flow A: Returning User -> Login instantly
         return await processUserSession(user, req, res, "Welcome back! Login successful.");
 
     } catch (error) {
@@ -432,13 +518,12 @@ export const verifyEmailOTP = async (req, res) => {
 
 export const completeRegistration = async (req, res) => {
     try {
-        const { firstName, lastName, phone, registrationToken } = req.body;
+        const { firstName, lastName, phone, password, registrationToken } = req.body;
 
-        if (!firstName || !lastName || !phone || !registrationToken) {
-            return res.status(400).json({ error: "All profile fields and verification signatures are required." });
+        if (!firstName || !lastName || !phone || !password || !registrationToken) {
+            return res.status(400).json({ error: "All profile fields, password, and registration token are required." });
         }
 
-        // 1. Decode and verify the short-lived registration token to get the email address
         let decoded;
         try {
             decoded = jwt.verify(registrationToken, process.env.JWT_SECRET);
@@ -448,15 +533,16 @@ export const completeRegistration = async (req, res) => {
 
         const verifiedEmail = decoded.email;
 
-        // 2. Double-check if a race condition happened and the user was created in the meantime
         let existingUser = await User.findOne({ email: verifiedEmail });
         if (existingUser) {
             return res.status(400).json({ error: "An account with this email address already exists." });
         }
 
-        // 3. Construct and save the clean profile configuration to the Database
+        if (await User.exists({ phone: phone.trim() })) {
+            return res.status(400).json({ error: "This phone number is already associated with another account." });
+        }
+
         const generatedId = `USR-${Date.now().toString().slice(-4)}${Math.floor(1000 + Math.random() * 9000)}`;
-        const secureFallbackPassword = uuidv4(); 
 
         const newUser = new User({
             id: generatedId,
@@ -464,12 +550,11 @@ export const completeRegistration = async (req, res) => {
             lastName: lastName.trim(),
             email: verifiedEmail,
             phone: phone.trim(),
-            password: secureFallbackPassword
+            password: password.trim()
         });
 
         await newUser.save();
 
-        // 4. Provision their login token and establish their active Redux state session
         return await processUserSession(newUser, req, res, "Account successfully provisioned! Welcome to Urban.");
 
     } catch (error) {
