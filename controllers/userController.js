@@ -249,8 +249,8 @@ export const checkAuthIdentity = async (req, res) => {
     try {
         const { mode, identifierType = 'email', email, phone, adminLogin } = req.body;
 
-        if (!mode || !['login', 'register'].includes(mode)) {
-            return res.status(400).json({ error: 'Auth mode must be either login or register.' });
+        if (!mode || !['login', 'register', 'forgot'].includes(mode)) {
+            return res.status(400).json({ error: 'Auth mode must be login, register, or forgot.' });
         }
 
         const normalizedEmail = email ? String(email).trim().toLowerCase() : '';
@@ -294,6 +294,21 @@ export const checkAuthIdentity = async (req, res) => {
                 phone: existingUser.phone,
                 role: existingUser.role,
                 message: 'Account found.'
+            });
+        }
+
+        if (mode === 'forgot') {
+            if (!existingUser) {
+                return res.status(404).json({ error: `No account found with this ${identifierType}.` });
+            }
+
+            return res.status(200).json({
+                success: true,
+                exists: true,
+                email: existingUser.email,
+                phone: existingUser.phone,
+                role: existingUser.role,
+                message: 'Account found. Please verify your email with OTP to reset your password.'
             });
         }
 
@@ -510,6 +525,43 @@ export const verifyEmailOTP = async (req, res) => {
     } catch (error) {
         console.error("Email Verification Endpoint Error:", error);
         return res.status(500).json({ error: error.message || "Internal profile session integration crash" });
+    }
+};
+
+export const resetPassword = async (req, res) => {
+    try {
+        const { email, otp, password } = req.body;
+
+        if (!email || !otp || !password) {
+            return res.status(400).json({ error: 'Email, OTP and new password are required.' });
+        }
+
+        const normalizedEmail = String(email).trim().toLowerCase();
+        const cacheKey = `otp:email:${normalizedEmail}`;
+        const cachedOtp = await redisClient.get(cacheKey);
+
+        if (!cachedOtp) {
+            return res.status(400).json({ error: 'OTP expired or not requested. Please request a new code.' });
+        }
+
+        if (String(cachedOtp).trim() !== String(otp).trim()) {
+            return res.status(400).json({ error: 'Invalid OTP code.' });
+        }
+
+        const user = await User.findOne({ email: normalizedEmail });
+        if (!user) {
+            return res.status(404).json({ error: 'No account exists for that email address.' });
+        }
+
+        await redisClient.del(cacheKey);
+
+        user.password = password.trim();
+        await user.save();
+
+        return await processUserSession(user, req, res, 'Password reset successful.');
+    } catch (error) {
+        console.error('Password Reset Error:', error);
+        return res.status(500).json({ error: 'Internal server error during password reset.' });
     }
 };
 
