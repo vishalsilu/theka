@@ -247,28 +247,25 @@ export const handleContactUsRequest = async (req, res) => {
 
 export const checkAuthIdentity = async (req, res) => {
     try {
-        const { mode, identifierType, email, phone, adminLogin } = req.body;
+        const { mode, identifierType = 'email', email, phone, adminLogin } = req.body;
 
         if (!mode || !['login', 'register'].includes(mode)) {
             return res.status(400).json({ error: 'Auth mode must be either login or register.' });
         }
 
-        if (!identifierType || !['email', 'phone'].includes(identifierType)) {
-            return res.status(400).json({ error: 'Identifier type must be email or phone.' });
-        }
-
         const normalizedEmail = email ? String(email).trim().toLowerCase() : '';
         const normalizedPhone = phone ? String(phone).trim() : '';
+        const effectiveIdentifierType = identifierType === 'phone' ? 'phone' : 'email';
 
-        if (identifierType === 'email' && !normalizedEmail) {
+        if (effectiveIdentifierType === 'email' && !normalizedEmail) {
             return res.status(400).json({ error: 'Email is required for email authentication.' });
         }
 
-        if (identifierType === 'phone' && !normalizedPhone) {
+        if (effectiveIdentifierType === 'phone' && !normalizedPhone) {
             return res.status(400).json({ error: 'Phone number is required for phone authentication.' });
         }
 
-        const existingUser = identifierType === 'email'
+        const existingUser = effectiveIdentifierType === 'email'
             ? await User.findOne({ email: normalizedEmail })
             : await User.findOne({ phone: normalizedPhone });
 
@@ -520,8 +517,8 @@ export const completeRegistration = async (req, res) => {
     try {
         const { firstName, lastName, phone, password, registrationToken } = req.body;
 
-        if (!firstName || !lastName || !phone || !password || !registrationToken) {
-            return res.status(400).json({ error: "All profile fields, password, and registration token are required." });
+        if (!firstName || !password || !registrationToken) {
+            return res.status(400).json({ error: "First name, password, and registration token are required." });
         }
 
         let decoded;
@@ -532,24 +529,37 @@ export const completeRegistration = async (req, res) => {
         }
 
         const verifiedEmail = decoded.email;
+        const normalizedPhone = phone ? String(phone).trim() : '';
+        const normalizedFirstName = String(firstName).trim() || `User${Date.now().toString().slice(-4)}`;
+        const normalizedLastName = lastName ? String(lastName).trim() : 'Guest';
 
         let existingUser = await User.findOne({ email: verifiedEmail });
         if (existingUser) {
             return res.status(400).json({ error: "An account with this email address already exists." });
         }
 
-        if (await User.exists({ phone: phone.trim() })) {
-            return res.status(400).json({ error: "This phone number is already associated with another account." });
+        let finalPhone = normalizedPhone;
+        if (finalPhone) {
+            const phoneExists = await User.exists({ phone: finalPhone });
+            if (phoneExists) {
+                return res.status(400).json({ error: "This phone number is already associated with another account." });
+            }
+        } else {
+            let uniquePhone;
+            do {
+                uniquePhone = `+91${Math.floor(1000000000 + Math.random() * 9000000000)}`;
+            } while (await User.exists({ phone: uniquePhone }));
+            finalPhone = uniquePhone;
         }
 
         const generatedId = `USR-${Date.now().toString().slice(-4)}${Math.floor(1000 + Math.random() * 9000)}`;
 
         const newUser = new User({
             id: generatedId,
-            firstName: firstName.trim(),
-            lastName: lastName.trim(),
+            firstName: normalizedFirstName,
+            lastName: normalizedLastName,
             email: verifiedEmail,
-            phone: phone.trim(),
+            phone: finalPhone,
             password: password.trim()
         });
 
