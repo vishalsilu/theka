@@ -103,15 +103,15 @@ async function processUserSession(user, req, res, messageSuccess) {
         redisClient.expire(`user_sessions:${user.id}`, SESSION_TTL)
     ]);
 
-    // 3. Cookie Setup
-    const isProd = process.env.NODE_ENV === 'production';
+   
     res.cookie('token', sessionToken, {
-        httpOnly: true,
-        secure: isProd,
-        sameSite: isProd ? 'none' : 'lax',
-        path: '/',
-        maxAge: SESSION_TTL * 1000
-    });
+    httpOnly: true,
+    secure: true,      
+    sameSite: 'none',  
+    path: '/',
+    maxAge: SESSION_TTL * 1000,
+    partitioned: true 
+});
 
     return res.json({ success: messageSuccess, user: userData });
 }

@@ -49,16 +49,32 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map((origin) => origin.trim()).filter(Boolean)
   : defaultOrigins;
 
+// app.use(cors({
+//   origin: function (origin, callback) {
+//     if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+//       callback(null, true);
+//     } else {
+//       callback(new Error('Not allowed by CORS'));
+//     }
+//   },
+//   credentials: true,
+//   allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-id', 'x-cart-token']
+// }));
+
 app.use(cors({
   origin: function (origin, callback) {
-    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+    // 1. Allow mobile/Postman requests that lack an Origin header (if necessary)
+    // 2. Check against your allowed list
+    if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      callback(new Error('CORS Policy Blocked This Request'));
     }
   },
   credentials: true,
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-id', 'x-cart-token']
+  // Ensure these headers match exactly what the client sends
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-id', 'x-cart-token'],
+  exposedHeaders: ['Set-Cookie'] // Ensure the browser can read the cookie
 }));
 app.use(express.json());
 // Parse cookies for cookie-based auth
