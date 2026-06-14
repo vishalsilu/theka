@@ -18,6 +18,7 @@ import invoiceRoutes from "./routes/invoiceRoutes.js"
 import analyticsRoutes from './routes/analyticsRoutes.js'
 import adminUserRoutes from './routes/adminUserRoutes.js'
 import subscriberRoutes from './routes/subscriberRoutes.js';
+import supportRoutes from './routes/supportRoutes.js';
 import { startCartSyncCron } from "./utils/cartSync.js";
 import startNamePropagation from "./tasks/namePropagation.js";
 import attributeRoutes from './routes/attributeRoutes.js'
@@ -102,6 +103,8 @@ app.use('/api/invoices', invoiceRoutes)
 app.use('/admin/api/invoices', invoiceRoutes)
 app.use('/api/analytics', analyticsRoutes)
 app.use('/admin/api/analytics', analyticsRoutes)
+app.use('/api/support', supportRoutes)
+app.use('/admin/api/support', supportRoutes)
 
 //Admin Routes
 app.use('/admin/api/orders', orderRoutes)

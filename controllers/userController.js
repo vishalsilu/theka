@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import User from "../models/Users.js";
 import Order from "../models/Order.js";
 import Product from "../models/Product.js";
+import SupportTicket from "../models/SupportTicket.js";
 import { v4 as uuidv4 } from 'uuid';
 import crypto from 'crypto';
 import { redisClient } from '../config/redis.js';
@@ -122,17 +123,17 @@ export const handleContactUsRequest = async (req, res) => {
 
 
 
-        const { userId, name, email, subject, message, recaptchaToken } = req.body;
+        const { userId, name, email, senderEmail, subject, message, recaptchaToken, source } = req.body;
 
-
-        if (!name || !email || !subject || !message) {
-            return res.status(400).json({ error: "All fields (name, email, subject, message) are required." });
-        }
-
-        const normalizedEmail = String(email).trim().toLowerCase();
+        const normalizedEmail = String(email || senderEmail || '').trim().toLowerCase();
         const cleanName = String(name).trim();
         const cleanSubject = String(subject).trim();
         const cleanMessage = String(message).trim();
+        const ticketSource = String(source || 'contact_form').trim();
+
+        if (!cleanName || !normalizedEmail || !cleanSubject || !cleanMessage) {
+            return res.status(400).json({ error: "All fields (name, email, subject, message) are required." });
+        }
 
 
 
@@ -209,13 +210,22 @@ export const handleContactUsRequest = async (req, res) => {
 
         const siteConfig = await SiteData.findOne({});
 
+        const targetSupportEmail = siteConfig?.contact?.email || siteConfig?.checkout?.supportEmail || "vishalsainig009@gmail.com";
 
-        const targetSupportEmail = siteConfig?.contact?.email || "vishalsainig009@gmail.com";
-
-        if (!siteConfig || !siteConfig.contact?.email) {
+        if (!siteConfig || !targetSupportEmail) {
             return res.status(500).json({ error: "Support contact email is not configured properly. Please try again later." });
-            console.warn("⚠️ Warning: contact email not found in SiteData collection. Using fallback mapping.");
         }
+
+        const supportTicket = await SupportTicket.create({
+            userId: userId ? String(userId).trim() : 'Guest',
+            name: cleanName,
+            email: normalizedEmail,
+            subject: cleanSubject,
+            message: cleanMessage,
+            source: ticketSource,
+            status: 'new',
+            mailSent: false
+        });
 
         const mailResult = await sendEmail({
             to: targetSupportEmail,
@@ -223,6 +233,9 @@ export const handleContactUsRequest = async (req, res) => {
             subject: `[Contact Us] - ${cleanName} ${userId ? `(ID: ${userId})` : ''} - ${cleanSubject}`,
             html: internalEmailHtml
         });
+
+        supportTicket.mailSent = Boolean(mailResult?.success);
+        await supportTicket.save();
 
         if (!mailResult || mailResult.success === false) {
             return res.status(500).json({
