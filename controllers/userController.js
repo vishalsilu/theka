@@ -103,15 +103,15 @@ async function processUserSession(user, req, res, messageSuccess) {
         redisClient.expire(`user_sessions:${user.id}`, SESSION_TTL)
     ]);
 
-   
-    res.cookie('token', sessionToken, {
-    httpOnly: true,
-    secure: true,      
-    sameSite: 'none',  
-    path: '/',
-    maxAge: SESSION_TTL * 1000,
-    partitioned: true 
-});
+    const cookieOptions = {
+        httpOnly: true,
+        secure: false,
+        sameSite: 'lax',
+        path: '/',
+        maxAge: SESSION_TTL * 1000,
+    };
+
+    res.cookie('token', sessionToken, cookieOptions);
 
     return res.json({ success: messageSuccess, user: userData });
 }
@@ -933,7 +933,13 @@ export const logoutUser = async (req, res) => {
         }
 
 
-        res.clearCookie('token', { path: '/' });
+        const cookieClearOptions = {
+            path: '/',
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+        };
+
+        res.clearCookie('token', cookieClearOptions);
         console.debug('[logout] cleared token cookie');
 
         return res.status(200).json({ success: true, message: 'Logged out', deletedKeysCount: deletedCount });

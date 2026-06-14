@@ -102,6 +102,7 @@ const orderSchema = new mongoose.Schema(
       type: String,
       default: "Placed"
     },
+    isDraft: { type: Boolean, default: false },
     trackingId: { type: String },
     shippingAddress: { type: addressSchema, required: true },
     tracking: { type: [trackingSchema], default: [] },

@@ -1,6 +1,7 @@
 import { razorpayInstance } from "../config/razorpay.js";
 import Order from "../models/Order.js";
 import User from "../models/Users.js";
+import { finalizeRazorpayOrder } from "./orderController.js";
 import crypto from "crypto";
 
 // --- INITIATE RAZORPAY ORDER ---
@@ -101,25 +102,17 @@ export const verifyPayment = async (req, res) => {
       // Continue with signature verification as sufficient proof
     }
 
-    // Update order with payment details
-    const paymentStatus = paymentDetails?.status === "captured" ? "completed" : "completed";
-    
-    await Order.findOneAndUpdate(
-      { orderId },
-      {
-        $set: {
-          paymentStatus,
-          "paymentDetails.razorpayPaymentId": razorpayPaymentId,
-          "paymentDetails.razorpayOrderId": razorpayOrderId,
-          "paymentDetails.verifiedAt": new Date().toISOString(),
-          paymentMethod: "razorpay",
-          status: "Confirmed", // Update order status to Confirmed after payment
-        },
-      },
-      { new: true }
-    );
+    const updatedOrder = await finalizeRazorpayOrder({
+      order,
+      paymentDetails: {
+        paymentId: razorpayPaymentId,
+        orderId: razorpayOrderId,
+        verifiedAt: new Date().toISOString(),
+        webhookVerifiedAt: undefined,
+        source: 'Razorpay Verification',
+      }
+    });
 
-    // Invalidate order caches
     const { redisClient } = await import("../config/redis.js");
     await redisClient.del(`order:detail:${orderId}`).catch(() => {});
     await redisClient.del(`orders:user:${userId}`).catch(() => {});
@@ -128,6 +121,7 @@ export const verifyPayment = async (req, res) => {
       success: true,
       message: "Payment verified successfully",
       orderId,
+      order: updatedOrder,
     });
   } catch (error) {
     console.error("Payment verification error:", error);
@@ -162,20 +156,18 @@ export const razorpayWebhook = async (req, res) => {
       if (orderId && userId) {
         const order = await Order.findOne({ orderId });
         if (order && order.userId === userId) {
-          await Order.findOneAndUpdate(
-            { orderId },
-            {
-              $set: {
-                paymentStatus: "completed",
-                "paymentDetails.razorpayPaymentId": payment.id,
-                "paymentDetails.razorpayOrderId": payment.order_id,
-                "paymentDetails.webhookVerifiedAt": new Date().toISOString(),
-                status: "Confirmed",
-              },
-            }
-          );
+          await finalizeRazorpayOrder({
+            order,
+            paymentDetails: {
+              paymentId: payment.id,
+              orderId: payment.order_id,
+              verifiedAt: new Date().toISOString(),
+              webhookVerifiedAt: new Date().toISOString(),
+              source: 'Razorpay Webhook',
+            },
+            eventLabel: 'Payment Captured',
+          });
 
-          // Invalidate caches
           const { redisClient } = await import("../config/redis.js");
           await redisClient.del(`order:detail:${orderId}`).catch(() => {});
           await redisClient.del(`orders:user:${userId}`).catch(() => {});

@@ -4,45 +4,38 @@ import { redisClient } from '../config/redis.js';
 
 const getAuthToken = (req) => {
     const authHeader = req.get('Authorization') || req.headers.authorization;
+   console.log("🔍 Authorization Header:", authHeader);
     if (authHeader?.toLowerCase().startsWith('bearer ')) {
         return authHeader.split(' ')[1];
     }
     return req.cookies?.token || null;
 };
 
-const resolveUserFromToken = async (token) => {
-    // Only accept opaque session tokens from Redis; no JWT fallback.
-    // This ensures logout actually invalidates the session.
-    const cachedSession = await redisClient.get(`session:${token}`);
-    if (cachedSession) {
-        return JSON.parse(cachedSession);
-    }
-
-    return null;
+export const resolveUserFromToken = async (token) => {
+    // No need to verify a JWT here because this is a session-based approach
+    const key = `session:${token.trim()}`;
+    const cachedSession = await redisClient.get(key);
+    
+    return cachedSession ? JSON.parse(cachedSession) : null;
 };
 
+// Cleaned up middleware
 export const protect = async (req, res, next) => {
-    const token = getAuthToken(req);
+    // 1. Log what cookies we actually see
+    console.log("🔍 Cookies received:", req.cookies);
+
+    const token = req.cookies?.token;
 
     if (!token) {
-        return res.status(401).json({ alert: 'Not authorized, no token provided' });
+        return res.status(401).json({ alert: 'Not authorized, no session cookie found' });
     }
 
     const user = await resolveUserFromToken(token);
+
     if (!user) {
-        return res.status(401).json({ alert: 'Not authorized, token invalid or expired' });
+        return res.status(401).json({ alert: 'Not authorized, session invalid or expired' });
     }
 
     req.user = user;
-    next();
-};
-
-export const optionalProtect = async (req, res, next) => {
-    const token = getAuthToken(req);
-    
-    if (token) {
-        req.user = await resolveUserFromToken(token);
-    }
-    
     next();
 };

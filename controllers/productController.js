@@ -23,6 +23,20 @@ const parseBooleanValue = (value) => {
     return value;
 };
 
+const parseDateValue = (value) => {
+    if (value === undefined || value === null) return value;
+    if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (normalized === '' || normalized === 'null' || normalized === 'undefined') return null;
+    }
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+        throw new Error(`Invalid date value for sponsorUntil: ${JSON.stringify(value)}`);
+    }
+    return date;
+};
+
 const safeRedisDel = async (...keys) => {
     const flattened = keys.flat(Infinity).filter(Boolean).map(String);
     if (!flattened.length) return;
@@ -537,9 +551,15 @@ export const setProductSponsorship = async (req, res) => {
         const { isSponsored, sponsorPriority, sponsorUntil } = req.body;
 
         const update = {};
-        if (typeof isSponsored !== 'undefined') update.isSponsored = !!isSponsored;
-        if (typeof sponsorPriority !== 'undefined') update.sponsorPriority = Number(sponsorPriority) || 0;
-        if (typeof sponsorUntil !== 'undefined') update.sponsorUntil = sponsorUntil ? new Date(sponsorUntil) : null;
+        if (typeof isSponsored !== 'undefined') {
+            update.isSponsored = typeof isSponsored === 'string' ? parseBooleanValue(isSponsored) : !!isSponsored;
+        }
+        if (typeof sponsorPriority !== 'undefined') {
+            update.sponsorPriority = sponsorPriority === '' || sponsorPriority === 'null' ? 0 : Number(sponsorPriority) || 0;
+        }
+        if (typeof sponsorUntil !== 'undefined') {
+            update.sponsorUntil = parseDateValue(sponsorUntil);
+        }
 
         const query = [{ id }];
         if (mongoose.Types.ObjectId.isValid(id)) query.push({ _id: id });
@@ -982,6 +1002,15 @@ export const updateProduct = async (req, res) => {
         }
         if (typeof updateData.taxable === 'string') {
             updateData.taxable = parseBooleanValue(updateData.taxable);
+        }
+        if (typeof updateData.isSponsored === 'string') {
+            updateData.isSponsored = parseBooleanValue(updateData.isSponsored);
+        }
+        if (typeof updateData.sponsorPriority === 'string') {
+            updateData.sponsorPriority = updateData.sponsorPriority === '' || updateData.sponsorPriority === 'null' ? 0 : Number(updateData.sponsorPriority) || 0;
+        }
+        if (typeof updateData.sponsorUntil !== 'undefined') {
+            updateData.sponsorUntil = parseDateValue(updateData.sponsorUntil);
         }
 
         const { byToken: uploadedByToken, byVariantIndex: uploadedByVariantIndex } = buildUploadMappings(req);

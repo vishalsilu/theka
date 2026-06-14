@@ -33,10 +33,17 @@ export const createInvoiceForOrder = async ({ order }) => {
     invoiceNumber,
     orderId: order.orderId,
     amount: order.total || 0,
+    currency: order.currency || 'INR',
     itemsSnapshot: order.items || [],
     billing: order.billingAddress || order.shippingAddress || {},
     shipping: order.shippingAddress || {},
-    meta: { createdFromOrderId: order._id }
+    meta: {
+      createdFromOrderId: order._id,
+      customerId: order.userId,
+      paymentMethod: order.paymentMethod,
+      status: order.status,
+      paymentDetails: order.paymentDetails || {}
+    }
   });
   return invoice.toObject();
 };

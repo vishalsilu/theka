@@ -60,6 +60,125 @@ const computeTotals = ({ items, coupon, shippingConfig }) => {
 
 const generateOrderId = () => `ORD-${Math.floor(10000 + Math.random() * 90000)}`;
 
+const applyCouponUsage = async (couponCode, userId) => {
+  if (!couponCode) return;
+
+  await Coupon.findOneAndUpdate(
+    { code: couponCode },
+    [
+      {
+        $set: {
+          usedCount: { $add: ["$usedCount", 1] },
+          usageBy: {
+            $cond: [
+              {
+                $in: [userId, { $map: { input: "$usageBy", as: "u", in: "$$u.userId" } }]
+              },
+              {
+                $map: {
+                  input: "$usageBy",
+                  as: "item",
+                  in: {
+                    $cond: [
+                      { $eq: ["$$item.userId", userId] },
+                      { userId: userId, count: { $add: ["$$item.count", 1] } },
+                      "$$item"
+                    ]
+                  }
+                }
+              },
+              { $concatArrays: ["$usageBy", [{ userId, count: 1 }]] }
+            ]
+          }
+        }
+      }
+    ],
+    { new: true, updatePipeline: true }
+  ).catch(() => {});
+};
+
+const reduceStockForOrder = async (items) => {
+  if (!Array.isArray(items)) return;
+
+  for (const item of items) {
+    try {
+      await Product.updateOne(
+        { id: item.productId },
+        {
+          $inc: {
+            'variants.$[v].sizes.$[s].stock': -Number(item.quantity || 0),
+            salesCount: Number(item.quantity || 0)
+          }
+        },
+        {
+          arrayFilters: [
+            { 'v.id': Number(item.variantId) },
+            { 's.size': String(item.size) }
+          ]
+        }
+      );
+    } catch (err) {
+      console.warn('Failed to update product stock for', item.productId, err?.message || err);
+    }
+  }
+};
+
+const clearUserCart = async (userId) => {
+  await redisClient.del(`cart:user:${userId}`).catch(() => {});
+  await User.findOneAndUpdate({ id: userId }, { $set: { cart: [] } }).catch(() => {});
+  await redisClient.del(`orders:user:${userId}`).catch(() => {});
+};
+
+export const finalizeRazorpayOrder = async ({ order, paymentDetails = {}, eventLabel = 'Payment Confirmed' }) => {
+  if (!order || !order.orderId) throw new Error('Order is required for finalization');
+  if (['completed', 'failed'].includes(order.paymentStatus)) return order;
+
+  // Apply coupon usage only when Razorpay payment has truly completed.
+  if (order.coupon?.code) {
+    await applyCouponUsage(order.coupon.code, order.userId);
+  }
+
+  // Reduce stock and update product sales after payment success.
+  await reduceStockForOrder(order.items || []);
+
+  // Clear the user's cart and invalidate caches.
+  await clearUserCart(order.userId);
+
+  const updateFields = {
+    paymentStatus: 'completed',
+    paymentMethod: 'razorpay',
+    status: 'Confirmed',
+    isDraft: false,
+    razorpayOrderId: paymentDetails.orderId,
+    'paymentDetails.razorpayPaymentId': paymentDetails.paymentId,
+    'paymentDetails.razorpayOrderId': paymentDetails.orderId,
+    'paymentDetails.verifiedAt': paymentDetails.verifiedAt || new Date().toISOString(),
+    'paymentDetails.webhookVerifiedAt': paymentDetails.webhookVerifiedAt || paymentDetails.webhookVerifiedAt,
+    'paymentDetails.failedAt': paymentDetails.failedAt,
+    'paymentDetails.failureReason': paymentDetails.failureReason,
+  };
+
+  const updatePayload = { $set: {}, $push: { tracking: { status: eventLabel, date: today(), location: paymentDetails.source || 'Razorpay' } } };
+  Object.keys(updateFields).forEach((key) => {
+    if (updateFields[key] !== undefined) updatePayload.$set[key] = updateFields[key];
+  });
+
+  const updatedOrder = await Order.findOneAndUpdate(
+    { orderId: order.orderId },
+    updatePayload,
+    { new: true }
+  ).lean();
+
+  try {
+    const { createInvoiceForOrder } = await import('./invoiceController.js');
+    await createInvoiceForOrder({ order: updatedOrder });
+  } catch (invoiceErr) {
+    console.warn('Invoice creation failed after Razorpay payment confirmation', invoiceErr?.message || invoiceErr);
+  }
+
+  return updatedOrder;
+};
+
 // --- CREATE ORDER ---
 export const createOrder = async (req, res) => {
   try {
@@ -117,8 +236,37 @@ if (discType === 'percentage' && discValue > 0) {
       });
     }
 
-    const paymentMethod = req.body?.paymentMethod || "cod";
+    const siteData = await SiteData.findOne({}).lean();
+    const paymentMethod = String(req.body?.paymentMethod || "cod").trim();
     const couponCode = String(req.body?.coupon?.code || "").trim().toUpperCase();
+
+    const configuredOptions = Array.isArray(siteData?.payment?.paymentOptions)
+      ? siteData.payment.paymentOptions.map((opt) => ({
+          id: String(opt.id || '').trim(),
+          enabled: opt.enabled !== false
+        }))
+      : [];
+
+    const defaults = [
+      { id: 'razorpay', enabled: siteData?.payment?.onlinePaymentEnabled !== false },
+      { id: 'cod', enabled: siteData?.payment?.codEnabled !== false }
+    ];
+
+    const availableOptions = defaults.map((base) => {
+      const saved = configuredOptions.find((opt) => opt.id === base.id);
+      return {
+        id: base.id,
+        enabled: saved?.enabled !== undefined ? saved.enabled : base.enabled
+      };
+    });
+
+    const enabledIds = new Set(availableOptions.filter((opt) => opt.enabled).map((opt) => opt.id));
+
+    if (!enabledIds.has(paymentMethod)) {
+      return res.status(400).json({ error: 'Selected payment method is not available. Please choose another payment option.' });
+    }
+
+    const isRazorpay = paymentMethod === 'razorpay';
 
     let shippingAddress = null;
     const user = await User.findOne({ id: userId }).lean();
@@ -151,139 +299,92 @@ if (discType === 'percentage' && discValue > 0) {
     let orderId = generateOrderId();
     
     const order = await Order.create({
-      orderId, userId, items: enrichedItems, ...totals, coupon, paymentMethod,
-      status: "Placed", shippingAddress, tracking: [{ status: "Order Placed", date: today() }]
+      orderId,
+      userId,
+      items: enrichedItems,
+      ...totals,
+      coupon,
+      paymentMethod,
+      status: isRazorpay ? "Pending Payment" : "Placed",
+      shippingAddress,
+      tracking: [{ status: isRazorpay ? "Payment Pending" : "Order Placed", date: today() }],
+      isDraft: isRazorpay,
     });
 
-    // Update coupon usage (if any) BEFORE finalizing response
-    if (couponCode) {
-      await Coupon.findOneAndUpdate(
-        { code: couponCode },
-        [
-          {
-            $set: {
-              usedCount: { $add: ["$usedCount", 1] },
-              usageBy: {
-                $cond: [
-                  {
-                    $in: [userId, { $map: { input: "$usageBy", as: "u", in: "$$u.userId" } }]
-                  },
-                  {
-                    $map: {
-                      input: "$usageBy",
-                      as: "item",
-                      in: {
-                        $cond: [
-                          { $eq: ["$$item.userId", userId] },
-                          { userId: userId, count: { $add: ["$$item.count", 1] } },
-                          "$$item"
-                        ]
-                      }
-                    }
-                  },
-                  { $concatArrays: ["$usageBy", [{ userId, count: 1 }]] }
-                ]
+    if (!isRazorpay) {
+      // Update coupon usage (if any) BEFORE finalizing response
+      if (couponCode) {
+        await applyCouponUsage(couponCode, userId);
+      }
+
+      // REDUCE STOCK & INCREMENT SALES — do this before returning
+      await reduceStockForOrder(enrichedItems);
+
+      // CLEAR CART & INVALIDATE USER ORDERS CACHE
+      await clearUserCart(userId);
+
+      // PRODUCT CACHE INVALIDATION — Fetch product details to build explicit cache keys
+      try {
+        const keysToDelete = new Set(["products:all", "products:featured"]);
+
+        // Fetch each product to get collection/category info for explicit cache invalidation
+        for (const item of enrichedItems) {
+          try {
+            const product = await Product.findOne({ id: item.productId }).lean();
+            if (product) {
+              // Add product detail cache key
+              keysToDelete.add(`product:detail:${product.id}`);
+              keysToDelete.add(`product:detail:${product._id}`);
+
+              // Add collection/category specific cache keys
+              const collectionName = product.collectionInfo?.name || '';
+              const categoryName = product.categoryInfo?.name || '';
+              const collectionId = String(product.collectionInfo?.id || product.collectionInfo?._id || '');
+              const categoryId = String(product.categoryInfo?.id || product.categoryInfo?._id || '');
+
+              if (collectionName && categoryName) {
+                keysToDelete.add(`products:${collectionName.toLowerCase()}:${categoryName.toLowerCase()}:lite`);
               }
+              if (collectionId) keysToDelete.add(`products:collection:${collectionId}`);
+              if (categoryId) keysToDelete.add(`products:category:${categoryId}`);
+              if (collectionName) keysToDelete.add(`collectionProducts:${collectionName.toLowerCase()}:lite`);
             }
+          } catch (err) {
+            console.warn('Failed to fetch product for cache invalidation', item.productId, err?.message || err);
           }
-        ],
-        { new: true, updatePipeline: true }
-      ).catch(() => {});
-    }
-
-    // REDUCE STOCK & INCREMENT SALES — do this before returning
-    for (const item of enrichedItems) {
-      try {
-        // Use arrayFilters to atomically decrement the correct nested size stock
-        const res = await Product.updateOne(
-          { id: item.productId },
-          {
-            $inc: { 'variants.$[v].sizes.$[s].stock': -Number(item.quantity || 0), salesCount: Number(item.quantity || 0) }
-          },
-          {
-            arrayFilters: [ { 'v.id': Number(item.variantId) }, { 's.size': String(item.size) } ]
-          }
-        );
-
-        if (!res || res.matchedCount === 0) {
-          console.warn('Stock update did not match product', item.productId);
         }
-      } catch (err) {
-        console.warn('Failed to update product stock for', item.productId, err?.message || err);
-      }
-    }
 
-    // CLEAR CART & INVALIDATE USER ORDERS CACHE
-    await redisClient.del(`cart:user:${userId}`).catch(() => {});
-    // Delete product detail caches for all items in this order (avoid referencing a single `item` variable)
-    try {
-      const productDetailKeys = enrichedItems.map(i => `product:detail:${i.productId}`).filter(Boolean);
-      if (productDetailKeys.length) await redisClient.del(...productDetailKeys).catch(() => {});
-    } catch (e) {
-      // best-effort cache invalidation; ignore failures
-    }
-    await User.findOneAndUpdate({ id: userId }, { $set: { cart: [] } }).catch(() => {});
-    await redisClient.del(`orders:user:${userId}`).catch(() => {});
+        // Delete all explicit keys at once
+        const keysArray = Array.from(keysToDelete).filter(Boolean);
+        if (keysArray.length > 0) {
+          await redisClient.del(...keysArray).catch(() => {});
+        }
 
-    // PRODUCT CACHE INVALIDATION — Fetch product details to build explicit cache keys
-    try {
-      const keysToDelete = new Set(["products:all", "products:featured"]);
-
-      // Fetch each product to get collection/category info for explicit cache invalidation
-      for (const item of enrichedItems) {
+        // Pattern-based sweep as safety net for any remaining list caches
         try {
-          const product = await Product.findOne({ id: item.productId }).lean();
-          if (product) {
-            // Add product detail cache key
-            keysToDelete.add(`product:detail:${product.id}`);
-            keysToDelete.add(`product:detail:${product._id}`);
-
-            // Add collection/category specific cache keys
-            const collectionName = product.collectionInfo?.name || '';
-            const categoryName = product.categoryInfo?.name || '';
-            const collectionId = String(product.collectionInfo?.id || product.collectionInfo?._id || '');
-            const categoryId = String(product.categoryInfo?.id || product.categoryInfo?._id || '');
-
-            if (collectionName && categoryName) {
-              keysToDelete.add(`products:${collectionName.toLowerCase()}:${categoryName.toLowerCase()}:lite`);
-            }
-            if (collectionId) keysToDelete.add(`products:collection:${collectionId}`);
-            if (categoryId) keysToDelete.add(`products:category:${categoryId}`);
-            if (collectionName) keysToDelete.add(`collectionProducts:${collectionName.toLowerCase()}:lite`);
+          for await (const key of redisClient.scanIterator({ MATCH: "products:*" })) {
+            await redisClient.del(key).catch(() => {});
           }
-        } catch (err) {
-          console.warn('Failed to fetch product for cache invalidation', item.productId, err?.message || err);
+          for await (const key of redisClient.scanIterator({ MATCH: "collectionProducts:*" })) {
+            await redisClient.del(key).catch(() => {});
+          }
+        } catch (scanErr) {
+          console.warn('Pattern-based cache sweep had issues', scanErr?.message || scanErr);
         }
-      }
+      } catch (err) { console.warn("Cache invalidation error", err); }
 
-      // Delete all explicit keys at once
-      const keysArray = Array.from(keysToDelete).filter(Boolean);
-      if (keysArray.length > 0) {
-        await redisClient.del(...keysArray).catch(() => {});
-      }
-
-      // Pattern-based sweep as safety net for any remaining list caches
+      // Create invoice record (immutable) for this order and then return
       try {
-        for await (const key of redisClient.scanIterator({ MATCH: "products:*" })) {
-          await redisClient.del(key).catch(() => {});
-        }
-        for await (const key of redisClient.scanIterator({ MATCH: "collectionProducts:*" })) {
-          await redisClient.del(key).catch(() => {});
-        }
-      } catch (scanErr) {
-        console.warn('Pattern-based cache sweep had issues', scanErr?.message || scanErr);
+        const { createInvoiceForOrder } = await import('./invoiceController.js');
+        const invoice = await createInvoiceForOrder({ order });
+        return res.status(201).json({ success: true, order, invoice, shipping: order.shipping });
+      } catch (invErr) {
+        console.warn('Invoice creation failed', invErr);
+        return res.status(201).json({ success: true, order, shipping: order.shipping });
       }
-    } catch (err) { console.warn("Cache invalidation error", err); }
-
-    // Create invoice record (immutable) for this order and then return
-    try {
-      const { createInvoiceForOrder } = await import('./invoiceController.js');
-      const invoice = await createInvoiceForOrder({ order });
-      return res.status(201).json({ success: true, order, invoice, shipping: order.shipping });
-    } catch (invErr) {
-      console.warn('Invoice creation failed', invErr);
-      return res.status(201).json({ success: true, order, shipping: order.shipping });
     }
+
+    return res.status(201).json({ success: true, order, shipping: order.shipping });
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }
@@ -298,7 +399,8 @@ export const getMyOrders = async (req, res) => {
     const cached = await redisClient.get(cacheKey);
     if (cached) return res.status(200).json({ success: true, orders: JSON.parse(cached) });
 
-    const orders = await Order.find({ userId }).sort({ createdAt: -1 }).lean();
+    const query = { userId, isDraft: false };
+    const orders = await Order.find(query).sort({ createdAt: -1 }).lean();
     await redisClient.setEx(cacheKey, 1800, JSON.stringify(orders)); // 30 min cache
 
     return res.status(200).json({ success: true, orders });
@@ -549,8 +651,12 @@ export const submitOrderReviews = async (req, res) => {
 // --- REMAINING ADMIN CONTROLLERS ---
 export const getAllOrdersAdmin = async (req, res) => {
   try {
-    const { status, q, sortBy, sortOrder } = req.query;
+    const { status, q, sortBy, sortOrder, includeDrafts } = req.query;
     const query = {};
+
+    if (includeDrafts !== 'true') {
+      query.isDraft = false;
+    }
 
     if (status && status !== "All") {
       query.status = status;

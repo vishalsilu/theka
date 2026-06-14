@@ -102,11 +102,19 @@ const ShippingSchema = new mongoose.Schema({
   methods: { type: [ShippingMethodSchema], default: [] }
 }, { _id: false });
 
+const PaymentOptionSchema = new mongoose.Schema({
+  id: { type: String, trim: true, required: true },
+  label: { type: String, trim: true, default: '' },
+  description: { type: String, trim: true, default: '' },
+  enabled: { type: Boolean, default: true }
+}, { _id: false });
+
 const PaymentSchema = new mongoose.Schema({
   currency: { type: String, trim: true, default: 'INR' },
   codEnabled: { type: Boolean, default: true },
   onlinePaymentEnabled: { type: Boolean, default: true },
-  paymentInstructions: { type: String, trim: true, default: '' }
+  paymentInstructions: { type: String, trim: true, default: '' },
+  paymentOptions: { type: [PaymentOptionSchema], default: [] }
 }, { _id: false });
 
 const CheckoutSchema = new mongoose.Schema({
