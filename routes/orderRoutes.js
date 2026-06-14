@@ -16,11 +16,23 @@ import {
   updateOrderStatusAdmin,
   issueRefundAdmin
 } from "../controllers/orderController.js";
+import {
+  initiateRazorpayOrder,
+  verifyPayment,
+  razorpayWebhook,
+  handlePaymentFailure
+} from "../controllers/paymentController.js";
 
 const router = express.Router();
 
 router.post("/", protect, createOrder);
 router.get("/my", protect, getMyOrders);
+
+// Payment endpoints
+router.post("/payment/initiate", protect, initiateRazorpayOrder);
+router.post("/payment/verify", protect, verifyPayment);
+router.post("/payment/failure", protect, handlePaymentFailure);
+router.post("/webhook/razorpay", razorpayWebhook); // Webhook endpoint - no auth required
 
 router.get("/admin/all", protect, adminOnly, getAllOrdersAdmin);
 router.get("/admin/:orderId", protect, adminOnly, getOrderById);

@@ -80,8 +80,22 @@ const orderSchema = new mongoose.Schema(
     },
     paymentMethod: {
       type: String,
-      enum: ["card", "upi", "cod"],
+      enum: ["card", "upi", "cod", "razorpay"],
       default: "cod"
+    },
+    paymentStatus: {
+      type: String,
+      enum: ["pending", "authorized", "completed", "failed"],
+      default: "pending"
+    },
+    razorpayOrderId: { type: String },
+    paymentDetails: {
+      razorpayPaymentId: { type: String },
+      razorpayOrderId: { type: String },
+      verifiedAt: { type: Date },
+      webhookVerifiedAt: { type: Date },
+      failedAt: { type: Date },
+      failureReason: { type: String }
     },
     // Allow flexible status values (admin can add custom statuses like Booked, Reached, In Transit, etc.)
     status: {
