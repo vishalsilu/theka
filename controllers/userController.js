@@ -106,8 +106,8 @@ async function processUserSession(user, req, res, messageSuccess) {
 
     const cookieOptions = {
         httpOnly: true,
-        secure: false,
-        sameSite: 'lax',
+        secure: true,
+        sameSite: 'none',
         path: '/',
         maxAge: SESSION_TTL * 1000,
     };

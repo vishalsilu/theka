@@ -50,37 +50,37 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map((origin) => origin.trim()).filter(Boolean)
   : defaultOrigins;
 
-app.use(cors({
-  origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl)
-    if (!origin) return callback(null, true);
-    
-    if (allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true, // MUST be true for cookies to be sent
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-id', 'x-cart-token'],
-  exposedHeaders: ['Set-Cookie']
-}));
-
 // app.use(cors({
 //   origin: function (origin, callback) {
-//     // 1. Allow mobile/Postman requests that lack an Origin header (if necessary)
-//     // 2. Check against your allowed list
-//     if (!origin || allowedOrigins.includes(origin)) {
+//     // Allow requests with no origin (like mobile apps or curl)
+//     if (!origin) return callback(null, true);
+    
+//     if (allowedOrigins.includes(origin)) {
 //       callback(null, true);
 //     } else {
-//       callback(new Error('CORS Policy Blocked This Request'));
+//       callback(new Error('Not allowed by CORS'));
 //     }
 //   },
-//   credentials: true,
-//   // Ensure these headers match exactly what the client sends
+//   credentials: true, // MUST be true for cookies to be sent
 //   allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-id', 'x-cart-token'],
-//   exposedHeaders: ['Set-Cookie'] // Ensure the browser can read the cookie
+//   exposedHeaders: ['Set-Cookie']
 // }));
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // 1. Allow mobile/Postman requests that lack an Origin header (if necessary)
+    // 2. Check against your allowed list
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('CORS Policy Blocked This Request'));
+    }
+  },
+  credentials: true,
+  // Ensure these headers match exactly what the client sends
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-id', 'x-cart-token'],
+  exposedHeaders: ['Set-Cookie'] // Ensure the browser can read the cookie
+}));
 app.use(express.json());
 // Parse cookies for cookie-based auth
 
