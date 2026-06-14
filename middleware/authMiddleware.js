@@ -4,7 +4,6 @@ import { redisClient } from '../config/redis.js';
 
 const getAuthToken = (req) => {
     const authHeader = req.get('Authorization') || req.headers.authorization;
-   console.log("🔍 Authorization Header:", authHeader);
     if (authHeader?.toLowerCase().startsWith('bearer ')) {
         return authHeader.split(' ')[1];
     }
@@ -22,7 +21,6 @@ export const resolveUserFromToken = async (token) => {
 // Cleaned up middleware
 export const protect = async (req, res, next) => {
     // 1. Log what cookies we actually see
-    console.log("🔍 Cookies received:", req.cookies);
 
     const token = req.cookies?.token;
 

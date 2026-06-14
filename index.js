@@ -68,18 +68,15 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
 
 app.use(cors({
   origin: function (origin, callback) {
-    // 1. Allow mobile/Postman requests that lack an Origin header (if necessary)
-    // 2. Check against your allowed list
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
       callback(new Error('CORS Policy Blocked This Request'));
     }
   },
-  credentials: true,
-  // Ensure these headers match exactly what the client sends
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-id', 'x-cart-token'],
-  exposedHeaders: ['Set-Cookie'] // Ensure the browser can read the cookie
+  credentials: true, 
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-id', 'x-cart-token']
+  // Removed exposedHeaders: ['Set-Cookie']
 }));
 app.use(express.json());
 // Parse cookies for cookie-based auth
