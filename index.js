@@ -26,7 +26,6 @@ import { connectToWhatsApp } from './config/whatsapp.js';
 
 
 const app = express();
-app.set('trust proxy', true);
 app.use(cookieParser());
 const port = process.env.PORT || 5000;
 const otpCache = new Map();
@@ -75,7 +74,7 @@ app.use(cors({
       callback(new Error('CORS Policy Blocked This Request'));
     }
   },
-  credentials: true,
+  credentials: true, 
   allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-id', 'x-cart-token'],
   exposedHeaders: ['Set-Cookie']
 }));
