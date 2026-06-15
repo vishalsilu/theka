@@ -105,13 +105,16 @@ async function processUserSession(user, req, res, messageSuccess) {
     ]);
 
     const isProduction = process.env.NODE_ENV === 'production' || Boolean(process.env.RENDER) || process.env.DEPLOYMENT_ENV === 'production';
-    const isSecureRequest = isProduction || req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https');
+    const forwardedProto = String(req.headers['x-forwarded-proto'] || '').toLowerCase();
+    const isSecureRequest = isProduction || req.secure || forwardedProto.includes('https');
+    const cookieDomain = isProduction ? String(process.env.COOKIE_DOMAIN || req.hostname || '').trim() : undefined;
     const cookieOptions = {
         httpOnly: true,
         secure: isSecureRequest,
         sameSite: isSecureRequest ? 'none' : 'lax',
         path: '/',
         maxAge: SESSION_TTL * 1000,
+        ...(cookieDomain ? { domain: cookieDomain } : {}),
     };
 
     res.cookie('token', sessionToken, cookieOptions);
@@ -953,6 +956,7 @@ export const logoutUser = async (req, res) => {
             path: '/',
             secure: isProduction,
             sameSite: isProduction ? 'none' : 'lax',
+            ...(isProduction ? { domain: String(process.env.COOKIE_DOMAIN || req.hostname || '').trim() } : {}),
         };
 
         res.clearCookie('token', cookieClearOptions);
