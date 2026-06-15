@@ -106,8 +106,8 @@ async function processUserSession(user, req, res, messageSuccess) {
 
     const cookieOptions = {
         httpOnly: true,
-        secure: true,
-        sameSite: 'none',
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
         path: '/',
         maxAge: SESSION_TTL * 1000,
     };
