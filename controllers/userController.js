@@ -104,10 +104,12 @@ async function processUserSession(user, req, res, messageSuccess) {
         redisClient.expire(`user_sessions:${user.id}`, SESSION_TTL)
     ]);
 
+    const isProduction = process.env.NODE_ENV === 'production' || Boolean(process.env.RENDER) || process.env.DEPLOYMENT_ENV === 'production';
+    const isSecureRequest = isProduction || req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https');
     const cookieOptions = {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+        secure: isSecureRequest,
+        sameSite: isSecureRequest ? 'none' : 'lax',
         path: '/',
         maxAge: SESSION_TTL * 1000,
     };
@@ -946,10 +948,11 @@ export const logoutUser = async (req, res) => {
         }
 
 
+        const isProduction = process.env.NODE_ENV === 'production' || Boolean(process.env.RENDER) || process.env.DEPLOYMENT_ENV === 'production';
         const cookieClearOptions = {
             path: '/',
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+            secure: isProduction,
+            sameSite: isProduction ? 'none' : 'lax',
         };
 
         res.clearCookie('token', cookieClearOptions);
