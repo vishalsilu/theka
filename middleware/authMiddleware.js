@@ -12,12 +12,20 @@ const getAuthToken = (req) => {
 };
 
 export const resolveUserFromToken = async (token) => {
-    // No need to verify a JWT here because this is a session-based approach
     const key = `session:${token.trim()}`;
-    console.log('Looking up session in Redis with key:', key);
     const cachedSession = await redisClient.get(key);
     
-    return cachedSession ? JSON.parse(cachedSession) : null;
+    if (!cachedSession) {
+        console.error(`Redis miss: Key ${key} not found.`);
+        return null;
+    }
+    
+    try {
+        return JSON.parse(cachedSession);
+    } catch (e) {
+        console.error("Failed to parse Redis session:", e);
+        return null;
+    }
 };
 
 // Cleaned up middleware
