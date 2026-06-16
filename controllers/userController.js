@@ -764,18 +764,38 @@ export const completeRegistration = async (req, res) => {
 export const updateUser = async (req, res) => {
     try {
         const { id } = req.user;
-        const { firstName, lastName } = req.body;
+        // 1. Extract phone from req.body
+        const { firstName, lastName, phone } = req.body; 
 
         const user = await User.findOne({ id });
         if (!user) return res.status(404).json({ error: "User not found" });
 
-        if (firstName !== undefined) user.firstName = firstName;
-        if (lastName !== undefined) user.lastName = lastName;
+        // Update name fields
+        if (firstName !== undefined) user.firstName = String(firstName).trim();
+        if (lastName !== undefined) user.lastName = String(lastName).trim();
+        
+        // 2. Add phone saving logic with uniqueness check
+        if (phone !== undefined && String(phone).trim() !== '') {
+            const newPhone = String(phone).trim();
+            
+            // Only check if the phone is actually changing
+            if (newPhone !== user.phone) {
+                const phoneExists = await User.findOne({ phone: newPhone, id: { $ne: id } });
+                if (phoneExists) {
+                    return res.status(400).json({ error: "This phone number is already registered to another account." });
+                }
+                user.phone = newPhone;
+            }
+        }
 
         await user.save();
+        
         const userData = user.toObject();
+        // Crucial: remove password from object before sending to client/Redis
+        delete userData.password; 
         const jsonUser = JSON.stringify(userData);
 
+        // Invalidate/Update Redis cache
         await Promise.all([
             redisClient.setEx(`user:id:${user.id}`, 3600, jsonUser),
             redisClient.setEx(`user:email:${user.email || ''}`, 3600, jsonUser),
@@ -785,6 +805,7 @@ export const updateUser = async (req, res) => {
 
         return res.status(200).json({ success: "User profile updated successfully", user: userData });
     } catch (error) {
+        console.error("Update User Error:", error);
         return res.status(500).json({ error: error.message || "Internal Server Error" });
     }
 };
