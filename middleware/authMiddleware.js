@@ -2,13 +2,32 @@ import jwt from 'jsonwebtoken';
 import User from '../models/Users.js';
 import { redisClient } from '../config/redis.js';
 
+const extractTokenCookie = (req) => {
+    const cookieHeader = req.headers.cookie;
+    if (!cookieHeader || typeof cookieHeader !== 'string') {
+        return req.cookies?.token || null;
+    }
+
+    const tokenValues = cookieHeader
+        .split(';')
+        .map((pair) => pair.trim())
+        .filter((pair) => pair.startsWith('token='))
+        .map((pair) => pair.slice('token='.length));
+
+    if (tokenValues.length > 1) {
+        console.log('[server][auth] duplicate token cookie values found:', tokenValues);
+    }
+
+    return tokenValues.length ? tokenValues[tokenValues.length - 1] : req.cookies?.token || null;
+};
+
 const getAuthToken = (req) => {
     const authHeader = req.get('Authorization') || req.headers.authorization;
-    console.log('Authorization header:', authHeader,req);
+    console.log('[server][auth] Authorization header:', authHeader);
     if (authHeader?.toLowerCase().startsWith('bearer ')) {
         return authHeader.split(' ')[1];
     }
-    return req.cookies?.token || null;
+    return extractTokenCookie(req);
 };
 
 export const resolveUserFromToken = async (token) => {
@@ -30,7 +49,8 @@ export const resolveUserFromToken = async (token) => {
 
 // Cleaned up middleware
 export const protect = async (req, res, next) => {
-    const token = req.cookies?.token;
+    const token = getAuthToken(req);
+    const parsedToken = req.cookies?.token;
     console.log('[server][auth] protect request:', {
         originalUrl: req.originalUrl,
         method: req.method,
@@ -41,7 +61,8 @@ export const protect = async (req, res, next) => {
         origin: req.get('origin'),
         cookieHeader: req.headers.cookie,
         parsedCookies: req.cookies,
-        tokenValue: token,
+        parsedToken,
+        selectedToken: token,
     });
 
     if (!token) {
