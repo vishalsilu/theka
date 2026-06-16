@@ -30,10 +30,11 @@ const getAuthToken = (req) => {
 };
 
 const computeSessionFingerprint = (req) => {
+    // Only use the most stable headers. 
+    // Avoid 'origin' or 'accept-language' which change frequently on mobile.
     const userAgent = String(req.headers['user-agent'] || '').trim().slice(0, 512);
-    const acceptLanguage = String(req.headers['accept-language'] || '').trim().slice(0, 128);
-    const origin = String(req.headers.origin || '').trim().slice(0, 128);
-    return crypto.createHash('sha256').update(`${userAgent}|${acceptLanguage}|${origin}`).digest('hex');
+    // Remove origin and acceptLanguage to prevent mobile disconnects
+    return crypto.createHash('sha256').update(`${userAgent}`).digest('hex');
 };
 
 export const resolveUserFromToken = async (token, req) => {
@@ -61,18 +62,29 @@ export const resolveUserFromToken = async (token, req) => {
 
 // Cleaned up middleware
 export const protect = async (req, res, next) => {
-    const token = getAuthToken(req);
-    const parsedToken = req.cookies?.token;
+    try {
+        // 1. Unified Token Extraction
+        const token = req.cookies?.token || 
+                      req.headers.authorization?.split(' ')[1];
 
-    if (!token) {
-        return res.status(401).json({ alert: 'Not authorized, no session cookie found' });
+        if (!token) {
+            return res.status(401).json({ error: 'Not authorized, no token provided' });
+        }
+
+        // 2. Resolve User using your Redis session logic
+        const user = await resolveUserFromToken(token, req);
+        
+        if (!user) {
+            // This is the line triggered when Redis session is missing/expired
+            // or if the request fingerprint (browser/IP/OS) changed.
+            return res.status(401).json({ error: 'Not authorized, session invalid or expired' });
+        }
+
+        // 3. Attach user to request
+        req.user = user;
+        next();
+    } catch (error) {
+        console.error('[Middleware Error]:', error);
+        return res.status(500).json({ error: 'Internal server error during authentication' });
     }
-
-    const user = await resolveUserFromToken(token, req);
-    if (!user) {
-        return res.status(401).json({ alert: 'Not authorized, session invalid or expired' });
-    }
-
-    req.user = user;
-    next();
 };
