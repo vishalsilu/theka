@@ -16,6 +16,7 @@ const extractTokenCookie = (req) => {
         .map((pair) => pair.slice('token='.length));
 
     if (tokenValues.length > 1) {
+        console.log('[server][auth] duplicate token cookie values found:', tokenValues);
     }
 
     return tokenValues.length ? tokenValues[tokenValues.length - 1] : req.cookies?.token || null;
@@ -30,11 +31,10 @@ const getAuthToken = (req) => {
 };
 
 const computeSessionFingerprint = (req) => {
-    // Only use the most stable headers. 
-    // Avoid 'origin' or 'accept-language' which change frequently on mobile.
     const userAgent = String(req.headers['user-agent'] || '').trim().slice(0, 512);
-    // Remove origin and acceptLanguage to prevent mobile disconnects
-    return crypto.createHash('sha256').update(`${userAgent}`).digest('hex');
+    const acceptLanguage = String(req.headers['accept-language'] || '').trim().slice(0, 128);
+    const origin = String(req.headers.origin || '').trim().slice(0, 128);
+    return crypto.createHash('sha256').update(`${userAgent}|${acceptLanguage}|${origin}`).digest('hex');
 };
 
 export const resolveUserFromToken = async (token, req) => {
@@ -42,6 +42,7 @@ export const resolveUserFromToken = async (token, req) => {
     const cachedSession = await redisClient.get(key);
     
     if (!cachedSession) {
+        console.error(`Redis miss: Key ${key} not found.`);
         return null;
     }
     
@@ -49,11 +50,17 @@ export const resolveUserFromToken = async (token, req) => {
     try {
         sessionPayload = JSON.parse(cachedSession);
     } catch (e) {
+        console.error("Failed to parse Redis session:", e);
         return null;
     }
 
     const fingerprint = computeSessionFingerprint(req);
     if (!sessionPayload?.fingerprint || sessionPayload.fingerprint !== fingerprint) {
+        console.warn('[server][auth] session fingerprint mismatch', {
+            expected: sessionPayload?.fingerprint,
+            actual: fingerprint,
+            token,
+        });
         return null;
     }
 
