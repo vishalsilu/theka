@@ -104,7 +104,8 @@ async function processUserSession(user, req, res, messageSuccess) {
         redisClient.expire(`user_sessions:${user.id}`, SESSION_TTL)
     ]);
 
-    const isSecureRequest = req.secure || String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase() === 'https';
+    const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+    const isSecureRequest = req.secure || forwardedProto === 'https';
     const cookieOptions = {
         httpOnly: true,
         secure: isSecureRequest,
@@ -112,6 +113,15 @@ async function processUserSession(user, req, res, messageSuccess) {
         path: '/',
         maxAge: SESSION_TTL * 1000,
     };
+
+    console.log('[server][session] processUserSession request info:', {
+      origin: req.headers.origin,
+      protocol: req.protocol,
+      secure: req.secure,
+      forwardedProto,
+      cookieOptions,
+      sessionToken: sessionToken.slice(0, 8) + '...'
+    });
 
     res.cookie('token', sessionToken, cookieOptions);
 
@@ -890,10 +900,14 @@ export const getAddresses = async (req, res) => {
 
 export const getMe = async (req, res) => {
     try {
-        if (req.user) res.status(200).json({ success: true, user: req.user });
-        else res.status(404).json({ alert: "User not found" });
+        console.log('[server][getMe] cookies:', req.cookies, 'user:', req.user?.id);
+        if (req.user) {
+            return res.status(200).json({ success: true, user: req.user });
+        }
+        return res.status(404).json({ alert: "User not found" });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error('[server][getMe] error:', error);
+        return res.status(500).json({ message: error.message });
     }
 };
 

@@ -57,6 +57,9 @@ const allowedOriginPatterns = [
   /(^https:\/\/[^/]+\.render\.com$)/i,
 ];
 
+console.log('[server] CORS allowed origins:', allowedOrigins);
+console.log('[server] CORS allowed origin patterns:', allowedOriginPatterns);
+
 // When deployed behind a proxy (Render), trust the proxy so HTTPS detection works correctly.
 app.set('trust proxy', 1);
 
@@ -79,11 +82,14 @@ app.set('trust proxy', 1);
 app.use(cors({
   origin: function (origin, callback) {
     if (!origin) {
+      console.log('[server][CORS] no origin header, allowing request');
       return callback(null, true);
     }
 
     const allowed = allowedOrigins.includes(origin)
       || allowedOriginPatterns.some((pattern) => pattern.test(origin));
+
+    console.log('[server][CORS] origin:', origin, 'allowed:', allowed);
 
     if (allowed) {
       return callback(null, true);
@@ -131,6 +137,28 @@ app.use('/admin/api/attributes', attributeRoutes)
 
 // Root Route for testing
 app.get('/', (req, res) => res.send('Urban API is running...'));
+
+// Debug route for cookie/session inspection (only enabled in non-production)
+if (process.env.NODE_ENV !== 'production') {
+    app.get('/api/debug/cookie-inspect', (req, res) => {
+        const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+        return res.json({
+            message: 'Debug cookie inspect',
+            cookies: req.cookies || {},
+            headers: {
+                origin: req.headers.origin,
+                referer: req.headers.referer,
+                authorization: req.headers.authorization,
+                xForwardedProto: forwardedProto,
+                host: req.headers.host,
+            },
+            protocol: req.protocol,
+            secure: req.secure,
+            forwardedProto,
+            url: req.originalUrl,
+        });
+    });
+}
 
 // Multer error handler for file upload failures
 app.use((err, req, res, next) => {
