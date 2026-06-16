@@ -106,10 +106,11 @@ async function processUserSession(user, req, res, messageSuccess) {
 
     const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
     const isSecureRequest = req.secure || forwardedProto === 'https' || req.protocol === 'https';
+    const isDevHttp = process.env.NODE_ENV !== 'production' && !isSecureRequest;
     const cookieOptions = {
         httpOnly: true,
         secure: isSecureRequest,
-        sameSite: isSecureRequest ? 'none' : 'lax',
+        sameSite: isDevHttp ? 'none' : (isSecureRequest ? 'none' : 'lax'),
         path: '/',
         maxAge: SESSION_TTL * 1000,
     };
@@ -967,13 +968,16 @@ export const logoutUser = async (req, res) => {
         const isSecureRequest = req.secure || String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase() === 'https';
         const cookieClearOptions = {
             path: '/',
+            httpOnly: true,
             secure: isSecureRequest,
             sameSite: isSecureRequest ? 'none' : 'lax',
+            maxAge: 0,
         };
 
         res.clearCookie('token', cookieClearOptions);
-        res.clearCookie('token', { path: '/', secure: true, sameSite: 'none' });
-        res.clearCookie('token', { path: '/', secure: false, sameSite: 'lax' });
+        res.cookie('token', '', { ...cookieClearOptions, expires: new Date(0) });
+        res.clearCookie('token', { path: '/', secure: true, sameSite: 'none', maxAge: 0 });
+        res.clearCookie('token', { path: '/', secure: false, sameSite: 'lax', maxAge: 0 });
         console.debug('[logout] cleared token cookie');
 
         return res.status(200).json({ success: true, message: 'Logged out', deletedKeysCount: deletedCount });
