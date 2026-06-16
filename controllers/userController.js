@@ -104,13 +104,31 @@ async function processUserSession(user, req, res, messageSuccess) {
         redisClient.expire(`user_sessions:${user.id}`, SESSION_TTL)
     ]);
 
-   const cookieOptions = {
-    httpOnly: true,
-    secure: true, 
-    sameSite: 'none', 
-    path: '/',
-    maxAge: SESSION_TTL * 1000,
-};
+    const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+    const isSecureRequest = req.secure || forwardedProto === 'https' || req.protocol === 'https';
+    const cookieOptions = {
+        httpOnly: true,
+        secure: isSecureRequest,
+        sameSite: isSecureRequest ? 'none' : 'lax',
+        path: '/',
+        maxAge: SESSION_TTL * 1000,
+    };
+
+    // Clear both secure and non-secure variants before setting a fresh session cookie.
+    res.clearCookie('token', { path: '/', secure: true, sameSite: 'none' });
+    res.clearCookie('token', { path: '/', secure: false, sameSite: 'lax' });
+
+    console.debug('[session] model issue token', {
+        userId: user.id,
+        tokenPreview: `${sessionToken.slice(0, 8)}...`,
+        isSecureRequest,
+        cookieOptions: {
+            secure: cookieOptions.secure,
+            sameSite: cookieOptions.sameSite,
+            path: cookieOptions.path,
+            maxAge: cookieOptions.maxAge,
+        }
+    });
 
     res.cookie('token', sessionToken, cookieOptions);
 
@@ -957,6 +975,8 @@ export const logoutUser = async (req, res) => {
         };
 
         res.clearCookie('token', cookieClearOptions);
+        res.clearCookie('token', { path: '/', secure: true, sameSite: 'none' });
+        res.clearCookie('token', { path: '/', secure: false, sameSite: 'lax' });
         console.debug('[logout] cleared token cookie');
 
         return res.status(200).json({ success: true, message: 'Logged out', deletedKeysCount: deletedCount });
