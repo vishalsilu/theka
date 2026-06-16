@@ -57,9 +57,6 @@ const allowedOriginPatterns = [
   /(^https:\/\/[^/]+\.render\.com$)/i,
 ];
 
-console.log('[server] CORS allowed origins:', allowedOrigins);
-console.log('[server] CORS allowed origin patterns:', allowedOriginPatterns);
-
 // When deployed behind a proxy (Render), trust the proxy so HTTPS detection works correctly.
 app.set('trust proxy', 1);
 

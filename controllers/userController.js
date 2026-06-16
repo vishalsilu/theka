@@ -30,7 +30,6 @@ const isLocalhost = (hostname) => /^(localhost|127\.0\.0\.1|::1)$/.test(hostname
 const buildCookieOptions = (req) => {
     const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
     const isSecureRequest = req.secure || forwardedProto === 'https' || req.protocol === 'https';
-    const host = String(req.hostname || '').trim();
     const cookieOptions = {
         httpOnly: true,
         secure: isSecureRequest,
@@ -39,11 +38,19 @@ const buildCookieOptions = (req) => {
         maxAge: SESSION_TTL * 1000,
     };
 
-    if (host && !isLocalhost(host) && !/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
-        cookieOptions.domain = host;
+    const cookieDomain = String(process.env.COOKIE_DOMAIN || '').trim();
+    if (cookieDomain) {
+        cookieOptions.domain = cookieDomain;
     }
 
     return cookieOptions;
+};
+
+const computeSessionFingerprint = (req) => {
+    const userAgent = String(req.headers['user-agent'] || '').trim().slice(0, 512);
+    const acceptLanguage = String(req.headers['accept-language'] || '').trim().slice(0, 128);
+    const origin = String(req.headers.origin || '').trim().slice(0, 128);
+    return crypto.createHash('sha256').update(`${userAgent}|${acceptLanguage}|${origin}`).digest('hex');
 };
 
 function normalizeCartItem(raw) {
@@ -111,7 +118,20 @@ async function processUserSession(user, req, res, messageSuccess) {
 
     // 2. Session Issuance Logic
     const sessionToken = crypto.randomBytes(32).toString('hex');
+    const sessionFingerprint = computeSessionFingerprint(req);
+    const sessionPayload = {
+        user: userData,
+        fingerprint: sessionFingerprint,
+        meta: {
+            userAgent: String(req.headers['user-agent'] || '').trim().slice(0, 512),
+            acceptLanguage: String(req.headers['accept-language'] || '').trim().slice(0, 128),
+            origin: String(req.headers.origin || '').trim().slice(0, 128),
+            issuedAt: Date.now(),
+        },
+    };
+
     const jsonUser = JSON.stringify(userData);
+    const jsonSession = JSON.stringify(sessionPayload);
 
     // 
     // Parallelizing session storage and indexing
@@ -119,7 +139,7 @@ async function processUserSession(user, req, res, messageSuccess) {
         redisClient.setEx(`user:id:${user.id}`, SESSION_TTL, jsonUser),
         redisClient.setEx(`user:email:${user.email || ''}`, SESSION_TTL, jsonUser),
         redisClient.setEx(`user:phone:${user.phone || ''}`, SESSION_TTL, jsonUser),
-        redisClient.setEx(`session:${sessionToken}`, SESSION_TTL, jsonUser),
+        redisClient.setEx(`session:${sessionToken}`, SESSION_TTL, jsonSession),
         redisClient.sAdd(`user_sessions:${user.id}`, sessionToken),
         redisClient.expire(`user_sessions:${user.id}`, SESSION_TTL)
     ]);
@@ -127,19 +147,21 @@ async function processUserSession(user, req, res, messageSuccess) {
     const cookieOptions = buildCookieOptions(req);
 
     res.cookie('token', sessionToken, cookieOptions);
-    res.setHeader('X-Debug-Session-Token', sessionToken);
+    if (process.env.NODE_ENV !== 'production') {
+        res.setHeader('X-Debug-Session-Token', sessionToken);
+    }
 
     const sessionKey = `session:${sessionToken}`;
     const sessionExists = await redisClient.exists(sessionKey);
-    console.log('[server][session] issued cookie token and stored session:', {
-      sessionKey,
-      sessionExists,
-      cookieName: 'token',
-      cookieOptions,
-      responseOrigin: req.headers.origin,
-      requestPath: req.originalUrl,
-      requestMethod: req.method,
-    });
+    // console.log('[server][session] issued cookie token and stored session:', {
+    //   sessionKey,
+    //   sessionExists,
+    //   cookieName: 'token',
+    //   cookieOptions,
+    //   responseOrigin: req.headers.origin,
+    //   requestPath: req.originalUrl,
+    //   requestMethod: req.method,
+    // });
 
     return res.json({ success: messageSuccess, user: userData, sessionToken });
 }
@@ -916,7 +938,7 @@ export const getAddresses = async (req, res) => {
 
 export const getMe = async (req, res) => {
     try {
-        console.log('[server][getMe] cookies:', req.cookies, 'user:', req.user?.id);
+        // console.log('[server][getMe] cookies:', req.cookies, 'user:', req.user?.id);
         if (req.user) {
             return res.status(200).json({ success: true, user: req.user });
         }
@@ -929,12 +951,10 @@ export const getMe = async (req, res) => {
 
 export const logoutUser = async (req, res) => {
     try {
-        console.log('[logout] endpoint called');
         const token = req.cookies?.token || String(req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
         const isProd = process.env.NODE_ENV === 'production';
         let deletedCount = 0;
 
-        console.debug('[logout] received token:', token ? `${token.slice(0, 8)}...` : 'none');
 
         if (token) {
             try {

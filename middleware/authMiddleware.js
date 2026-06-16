@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import User from '../models/Users.js';
 import { redisClient } from '../config/redis.js';
@@ -23,14 +24,20 @@ const extractTokenCookie = (req) => {
 
 const getAuthToken = (req) => {
     const authHeader = req.get('Authorization') || req.headers.authorization;
-    console.log('[server][auth] Authorization header:', authHeader);
     if (authHeader?.toLowerCase().startsWith('bearer ')) {
         return authHeader.split(' ')[1];
     }
-    return req.cookies?.token || null;
+    return extractTokenCookie(req) || null;
 };
 
-export const resolveUserFromToken = async (token) => {
+const computeSessionFingerprint = (req) => {
+    const userAgent = String(req.headers['user-agent'] || '').trim().slice(0, 512);
+    const acceptLanguage = String(req.headers['accept-language'] || '').trim().slice(0, 128);
+    const origin = String(req.headers.origin || '').trim().slice(0, 128);
+    return crypto.createHash('sha256').update(`${userAgent}|${acceptLanguage}|${origin}`).digest('hex');
+};
+
+export const resolveUserFromToken = async (token, req) => {
     const key = `session:${token.trim()}`;
     const cachedSession = await redisClient.get(key);
     
@@ -39,42 +46,37 @@ export const resolveUserFromToken = async (token) => {
         return null;
     }
     
+    let sessionPayload;
     try {
-        return JSON.parse(cachedSession);
+        sessionPayload = JSON.parse(cachedSession);
     } catch (e) {
         console.error("Failed to parse Redis session:", e);
         return null;
     }
+
+    const fingerprint = computeSessionFingerprint(req);
+    if (!sessionPayload?.fingerprint || sessionPayload.fingerprint !== fingerprint) {
+        console.warn('[server][auth] session fingerprint mismatch', {
+            expected: sessionPayload?.fingerprint,
+            actual: fingerprint,
+            token,
+        });
+        return null;
+    }
+
+    return sessionPayload.user || null;
 };
 
 // Cleaned up middleware
 export const protect = async (req, res, next) => {
     const token = getAuthToken(req);
     const parsedToken = req.cookies?.token;
-    console.log('[server][auth] protect request:', {
-        originalUrl: req.originalUrl,
-        method: req.method,
-        hostname: req.hostname,
-        protocol: req.protocol,
-        secure: req.secure,
-        forwardedProto: req.headers['x-forwarded-proto'],
-        origin: req.get('origin'),
-        cookieHeader: req.headers.cookie,
-        parsedCookies: req.cookies,
-        parsedToken,
-        selectedToken: token,
-    });
 
     if (!token) {
         return res.status(401).json({ alert: 'Not authorized, no session cookie found' });
     }
 
-    const user = await resolveUserFromToken(token);
-    console.log('[server][auth] token lookup:', {
-        token,
-        userFound: Boolean(user),
-    });
-
+    const user = await resolveUserFromToken(token, req);
     if (!user) {
         return res.status(401).json({ alert: 'Not authorized, session invalid or expired' });
     }
