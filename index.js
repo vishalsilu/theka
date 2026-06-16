@@ -138,28 +138,6 @@ app.use('/admin/api/attributes', attributeRoutes)
 // Root Route for testing
 app.get('/', (req, res) => res.send('Urban API is running...'));
 
-// Debug route for cookie/session inspection (only enabled in non-production)
-if (process.env.NODE_ENV !== 'production') {
-    app.get('/api/debug/cookie-inspect', (req, res) => {
-        const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
-        return res.json({
-            message: 'Debug cookie inspect',
-            cookies: req.cookies || {},
-            headers: {
-                origin: req.headers.origin,
-                referer: req.headers.referer,
-                authorization: req.headers.authorization,
-                xForwardedProto: forwardedProto,
-                host: req.headers.host,
-            },
-            protocol: req.protocol,
-            secure: req.secure,
-            forwardedProto,
-            url: req.originalUrl,
-        });
-    });
-}
-
 // Multer error handler for file upload failures
 app.use((err, req, res, next) => {
     if (err && err.name === 'MulterError') {

@@ -30,16 +30,30 @@ export const resolveUserFromToken = async (token) => {
 
 // Cleaned up middleware
 export const protect = async (req, res, next) => {
-    // 1. Log what cookies we actually see
-
     const token = req.cookies?.token;
-console.log('Received cookies:',token , "Complete cookies", req.cookies);
+    console.log('[server][auth] protect request:', {
+        originalUrl: req.originalUrl,
+        method: req.method,
+        hostname: req.hostname,
+        protocol: req.protocol,
+        secure: req.secure,
+        forwardedProto: req.headers['x-forwarded-proto'],
+        origin: req.get('origin'),
+        cookieHeader: req.headers.cookie,
+        parsedCookies: req.cookies,
+        tokenValue: token,
+    });
+
     if (!token) {
         return res.status(401).json({ alert: 'Not authorized, no session cookie found' });
     }
 
     const user = await resolveUserFromToken(token);
-console.log('Resolved user from token:', user);
+    console.log('[server][auth] token lookup:', {
+        token,
+        userFound: Boolean(user),
+    });
+
     if (!user) {
         return res.status(401).json({ alert: 'Not authorized, session invalid or expired' });
     }
