@@ -114,23 +114,20 @@ async function processUserSession(user, req, res, messageSuccess) {
         maxAge: SESSION_TTL * 1000,
     };
 
-    // Clear both secure and non-secure variants before setting a fresh session cookie.
-    res.clearCookie('token', { path: '/', secure: true, sameSite: 'none' });
-    res.clearCookie('token', { path: '/', secure: false, sameSite: 'lax' });
-
-    console.debug('[session] model issue token', {
-        userId: user.id,
-        tokenPreview: `${sessionToken.slice(0, 8)}...`,
-        isSecureRequest,
-        cookieOptions: {
-            secure: cookieOptions.secure,
-            sameSite: cookieOptions.sameSite,
-            path: cookieOptions.path,
-            maxAge: cookieOptions.maxAge,
-        }
-    });
-
     res.cookie('token', sessionToken, cookieOptions);
+    res.setHeader('X-Debug-Session-Token', sessionToken);
+
+    const sessionKey = `session:${sessionToken}`;
+    const sessionExists = await redisClient.exists(sessionKey);
+    console.log('[server][session] issued cookie token and stored session:', {
+      sessionKey,
+      sessionExists,
+      cookieName: 'token',
+      cookieOptions,
+      responseOrigin: req.headers.origin,
+      requestPath: req.originalUrl,
+      requestMethod: req.method,
+    });
 
     return res.json({ success: messageSuccess, user: userData });
 }

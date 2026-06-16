@@ -70,6 +70,10 @@ export const protect = async (req, res, next) => {
     }
 
     const user = await resolveUserFromToken(token);
+    console.log('[server][auth] token lookup:', {
+        token,
+        userFound: Boolean(user),
+    });
 
     if (!user) {
         return res.status(401).json({ alert: 'Not authorized, session invalid or expired' });

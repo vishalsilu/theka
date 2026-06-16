@@ -33,62 +33,52 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-const BREVO_API_KEY = process.env.BREVO_API_KEY;
-const BREVO_EMAIL_USER = process.env.BREVO_EMAIL_USER;
-const BREVO_SENDER_NAME = process.env.BREVO_SENDER_NAME || 'Urban Royalty Support';
-
-if (!BREVO_API_KEY || !BREVO_EMAIL_USER) {
-    console.warn('⚠️ Brevo config missing: BREVO_API_KEY or BREVO_EMAIL_USER not set. Emails will fail if not configured.');
-}
-
-export const sendEmail = async ({ to, subject, html, replyTo }) => {
+export const sendEmail = async ({ to, subject, html }) => {
     try {
-        const payload = {
-            sender: {
-                name: BREVO_SENDER_NAME,
-                email: BREVO_EMAIL_USER
-            },
-            to: [{ email: to, name: 'Valued User' }],
-            subject,
-            htmlContent: html
-        };
-
-        if (replyTo) {
-            // Brevo accepts a "replyTo" object
-            payload.replyTo = { email: replyTo };
-        }
-
-        // Diagnostic log to help determine if requests reach Brevo
-        console.log('📨 Sending email via Brevo:', { to, subject, sender: BREVO_EMAIL_USER, replyTo });
-
+        // 1. CHANGED: Updated URL endpoint strictly to v3
         const response = await fetch('https://api.brevo.com/v3/smtp/email', {
             method: 'POST',
             headers: {
-                accept: 'application/json',
-                'api-key': BREVO_API_KEY,
+                'accept': 'application/json',
+                'api-key': process.env.BREVO_API_KEY,
                 'content-type': 'application/json'
             },
-            body: JSON.stringify(payload)
+            body: JSON.stringify({
+                sender: { 
+                    name: process.env.BREVO_SENDER_NAME || "Urban Royalty Support", // Fallback name if not set
+                    email: process.env.BREVO_EMAIL_USER // Double-check this is listed under Senders in Brevo!
+                },
+                // 2. CHANGED: Passing an explicit 'name' string along with the email
+                to: [{ 
+                    email: to,
+                    name: "Valued User" 
+                }],
+                subject: subject,
+                htmlContent: html
+            })
         });
 
-        const responseText = await response.text();
+        const responseText = await response.text(); 
+        
         let data = {};
         if (responseText) {
-            try { data = JSON.parse(responseText); } catch (e) { data = { raw: responseText }; }
+            try {
+                data = JSON.parse(responseText);
+            } catch (e) {
+                data = { message: responseText };
+            }
         }
-
-        console.log('📬 Brevo responded with status', response.status, 'and body', data);
 
         if (response.ok) {
-            return { success: true, status: response.status, data };
+            // Brevo returns a 201 Created with a messageId string upon a successful send
+            return { success: true, messageId: data.messageId || "Dispatched successfully" };
+        } else {
+            console.error("❌ Brevo Rejected Payload. Details:", data);
+            return { success: false, error: data.message || "Failed to send" };
         }
-
-        console.error('❌ Brevo rejected payload:', { status: response.status, body: data });
-        return { success: false, status: response.status, error: data?.message || JSON.stringify(data) };
-
     } catch (error) {
-        console.error('❌ Network/Error sending to Brevo:', error?.message || error);
-        return { success: false, error: error?.message || String(error) };
+        console.error("❌ Underlying Network Error:", error.message);
+        return { success: false, error: error.message };
     }
 };
 

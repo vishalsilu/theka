@@ -57,25 +57,26 @@ const allowedOriginPatterns = [
   /(^https:\/\/[^/]+\.render\.com$)/i,
 ];
 
+console.log('[server] CORS allowed origins:', allowedOrigins);
+console.log('[server] CORS allowed origin patterns:', allowedOriginPatterns);
+
 // When deployed behind a proxy (Render), trust the proxy so HTTPS detection works correctly.
 app.set('trust proxy', 1);
 
 app.use(cors({
   origin: function (origin, callback) {
-    // 1. Allow mobile/non-browser requests (no origin)
-    if (!origin) return callback(null, true);
-
-    // 2. Check hardcoded list OR regex patterns
-    const isAllowed = allowedOrigins.includes(origin) || 
-                      allowedOriginPatterns.some((pattern) => pattern.test(origin));
-
-    if (isAllowed) {
-      callback(null, true);
-    } else {
-      // Log the rejected origin to your server console so you can see why it fails
-      console.error(`CORS Blocked: ${origin}`);
-      callback(new Error('Not allowed by CORS'));
+    if (!origin) {
+      return callback(null, true);
     }
+
+    const allowed = allowedOrigins.includes(origin)
+      || allowedOriginPatterns.some((pattern) => pattern.test(origin));
+
+    if (allowed) {
+      return callback(null, true);
+    }
+
+    callback(new Error(`CORS Policy Blocked This Request: ${origin}`));
   },
   credentials: true, // REQUIRED for cookies
   // Ensure these headers match exactly what you are sending
