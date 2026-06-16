@@ -104,10 +104,11 @@ async function processUserSession(user, req, res, messageSuccess) {
         redisClient.expire(`user_sessions:${user.id}`, SESSION_TTL)
     ]);
 
+    const isProd = process.env.NODE_ENV === 'production';
     const cookieOptions = {
         httpOnly: true,
-        secure: true,
-        sameSite: 'none',
+        secure: isProd,
+        sameSite: isProd ? 'none' : 'lax',
         path: '/',
         maxAge: SESSION_TTL * 1000,
     };

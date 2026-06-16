@@ -41,14 +41,19 @@ const defaultOrigins = [
   'http://172.28.56.116:5174',
   // Typically your Admin Dashboard
   'https://urbanroyalty.netlify.app',
-  'https://adminurbanroyalty.netlify.app'
-];
-
- // Debugging line to confirm initialization
+  'https://adminurbanroyalty.netlify.app',
+].filter(Boolean);
 
 const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map((origin) => origin.trim()).filter(Boolean)
   : defaultOrigins;
+
+if (process.env.FRONTEND_URL) {
+  allowedOrigins.push(process.env.FRONTEND_URL.trim());
+}
+
+// When deployed behind a proxy (Render), trust the proxy so HTTPS detection works correctly.
+app.set('trust proxy', 1);
 
 // app.use(cors({
 //   origin: function (origin, callback) {
