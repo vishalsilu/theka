@@ -114,29 +114,7 @@ async function processUserSession(user, req, res, messageSuccess) {
         maxAge: SESSION_TTL * 1000,
     };
 
-    console.log('[server][session] processUserSession request info:', {
-      origin: req.headers.origin,
-      protocol: req.protocol,
-      secure: req.secure,
-      forwardedProto,
-      cookieOptions,
-      sessionToken: sessionToken.slice(0, 8) + '...'
-    });
-
     res.cookie('token', sessionToken, cookieOptions);
-    res.setHeader('X-Debug-Session-Token', sessionToken);
-
-    const sessionKey = `session:${sessionToken}`;
-    const sessionExists = await redisClient.exists(sessionKey);
-    console.log('[server][session] issued cookie token and stored session:', {
-      sessionKey,
-      sessionExists,
-      cookieName: 'token',
-      cookieOptions,
-      responseOrigin: req.headers.origin,
-      requestPath: req.originalUrl,
-      requestMethod: req.method,
-    });
 
     return res.json({ success: messageSuccess, user: userData });
 }
