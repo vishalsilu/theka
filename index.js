@@ -52,6 +52,11 @@ if (process.env.FRONTEND_URL) {
   allowedOrigins.push(process.env.FRONTEND_URL.trim());
 }
 
+const allowedOriginPatterns = [
+  /(^https:\/\/[^/]+\.netlify\.app$)/i,
+  /(^https:\/\/[^/]+\.render\.com$)/i,
+];
+
 // When deployed behind a proxy (Render), trust the proxy so HTTPS detection works correctly.
 app.set('trust proxy', 1);
 
@@ -73,13 +78,20 @@ app.set('trust proxy', 1);
 
 app.use(cors({
   origin: function (origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('CORS Policy Blocked This Request'));
+    if (!origin) {
+      return callback(null, true);
     }
+
+    const allowed = allowedOrigins.includes(origin)
+      || allowedOriginPatterns.some((pattern) => pattern.test(origin));
+
+    if (allowed) {
+      return callback(null, true);
+    }
+
+    callback(new Error(`CORS Policy Blocked This Request: ${origin}`));
   },
-  credentials: true, 
+  credentials: true,
   allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-id', 'x-cart-token'],
   exposedHeaders: ['Set-Cookie']
 }));
