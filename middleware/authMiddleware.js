@@ -62,29 +62,18 @@ export const resolveUserFromToken = async (token, req) => {
 
 // Cleaned up middleware
 export const protect = async (req, res, next) => {
-    try {
-        // 1. Unified Token Extraction
-        const token = req.cookies?.token || 
-                      req.headers.authorization?.split(' ')[1];
+    const token = getAuthToken(req);
+    const parsedToken = req.cookies?.token;
 
-        if (!token) {
-            return res.status(401).json({ error: 'Not authorized, no token provided' });
-        }
-
-        // 2. Resolve User using your Redis session logic
-        const user = await resolveUserFromToken(token, req);
-        
-        if (!user) {
-            // This is the line triggered when Redis session is missing/expired
-            // or if the request fingerprint (browser/IP/OS) changed.
-            return res.status(401).json({ error: 'Not authorized, session invalid or expired' });
-        }
-
-        // 3. Attach user to request
-        req.user = user;
-        next();
-    } catch (error) {
-        console.error('[Middleware Error]:', error);
-        return res.status(500).json({ error: 'Internal server error during authentication' });
+    if (!token) {
+        return res.status(401).json({ alert: 'Not authorized, no session cookie found' });
     }
+
+    const user = await resolveUserFromToken(token, req);
+    if (!user) {
+        return res.status(401).json({ alert: 'Not authorized, session invalid or expired' });
+    }
+
+    req.user = user;
+    next();
 };
