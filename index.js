@@ -57,12 +57,6 @@ const allowedOriginPatterns = [
   /(^https:\/\/[^/]+\.render\.com$)/i,
 ];
 
-if (process.env.NODE_ENV !== 'production') {
-  allowedOriginPatterns.push(
-    /(^https?:\/\/(?:localhost|127\.0\.0\.1|(?:\d{1,3}\.){3}\d{1,3})(?::\d+)?$)/i
-  );
-}
-
 console.log('[server] CORS allowed origins:', allowedOrigins);
 console.log('[server] CORS allowed origin patterns:', allowedOriginPatterns);
 
