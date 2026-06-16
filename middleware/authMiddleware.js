@@ -16,7 +16,6 @@ const extractTokenCookie = (req) => {
         .map((pair) => pair.slice('token='.length));
 
     if (tokenValues.length > 1) {
-        console.log('[server][auth] duplicate token cookie values found:', tokenValues);
     }
 
     return tokenValues.length ? tokenValues[tokenValues.length - 1] : req.cookies?.token || null;
@@ -42,7 +41,6 @@ export const resolveUserFromToken = async (token, req) => {
     const cachedSession = await redisClient.get(key);
     
     if (!cachedSession) {
-        console.error(`Redis miss: Key ${key} not found.`);
         return null;
     }
     
@@ -50,17 +48,11 @@ export const resolveUserFromToken = async (token, req) => {
     try {
         sessionPayload = JSON.parse(cachedSession);
     } catch (e) {
-        console.error("Failed to parse Redis session:", e);
         return null;
     }
 
     const fingerprint = computeSessionFingerprint(req);
     if (!sessionPayload?.fingerprint || sessionPayload.fingerprint !== fingerprint) {
-        console.warn('[server][auth] session fingerprint mismatch', {
-            expected: sessionPayload?.fingerprint,
-            actual: fingerprint,
-            token,
-        });
         return null;
     }
 

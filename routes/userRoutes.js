@@ -16,7 +16,8 @@ import {
     getUserAdmin,
     updateUserAdmin,
     deleteUserAdmin,
-    handleContactUsRequest
+    handleContactUsRequest,
+    verifyLoginCredentials
 } from "../controllers/userController.js"
 import { protect } from "../middleware/authMiddleware.js";
 import { adminOnly } from "../middleware/adminMiddleware.js";
@@ -25,6 +26,7 @@ import { otpLimiter } from "../middleware/otpLimiter.js";
 const routes = express.Router()
 
 routes.post('/email/check-identity', checkAuthIdentity);
+routes.post('/verify-credentials', verifyLoginCredentials);
 routes.post('/email/send-otp', otpLimiter, requestEmailOTP);
 routes.post('/email/verify-otp', verifyEmailOTP);
 routes.post('/email/reset-password', resetPassword);

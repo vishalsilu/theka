@@ -11,6 +11,7 @@ import axios from "axios";
 import { sendEmail } from '../config/email.js';
 import { validateRecaptcha } from "../middleware/verifyRecaptcha.js";
 import SiteData from '../models/SiteData.js';
+import bcrypt from "bcryptjs";
 
 const generateToken = (id) => {
     return jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -330,9 +331,9 @@ export const checkAuthIdentity = async (req, res) => {
             return res.status(400).json({ error: 'Phone number is required for phone authentication.' });
         }
 
-        const existingUser = effectiveIdentifierType === 'email'
-            ? await User.findOne({ email: normalizedEmail })
-            : await User.findOne({ phone: normalizedPhone });
+      const existingUser = effectiveIdentifierType === 'email'
+            ? await User.findOne({ email: normalizedEmail }).select('+password')
+            : await User.findOne({ phone: normalizedPhone }).select('+password');
 
         if (mode === 'login') {
             if (!existingUser) {
@@ -347,21 +348,17 @@ export const checkAuthIdentity = async (req, res) => {
                 return res.status(400).json({ error: 'Password is required for login.' });
             }
 
+            // FIX: Prevent crash if user has no password
+            if (!existingUser.password) {
+                return res.status(401).json({ error: 'Incorrect password.' });
+            }
+
+            // You can safely use your model method here now
             const passwordMatches = await existingUser.comparePassword(String(req.body.password).trim());
             if (!passwordMatches) {
                 return res.status(401).json({ error: 'Incorrect password.' });
             }
-
-            return res.status(200).json({
-                success: true,
-                exists: true,
-                email: existingUser.email,
-                phone: existingUser.phone,
-                role: existingUser.role,
-                message: 'Account found.'
-            });
         }
-
         if (mode === 'forgot') {
             if (!existingUser) {
                 return res.status(404).json({ error: `No account found with this ${identifierType}.` });
@@ -483,17 +480,40 @@ export const getOTPTemplate = (mode, otp, userName, adminLogin) => {
 
 export const requestEmailOTP = async (req, res) => {
     try {
-        const { email, adminLogin, recaptchaToken, mode } = req.body;
+        // We replaced 'password' with 'preAuthToken'
+        const { email, adminLogin, recaptchaToken, mode, preAuthToken } = req.body;
 
         if (!email) return res.status(400).json({ error: "Email address is required" });
         const normalizedEmail = String(email).trim().toLowerCase();
 
         let user = null;
-        if (['login', 'forgot'].includes(mode)) {
-            user = await User.findOne({ email: normalizedEmail }).select("firstName lastName role");
 
+        if (mode === 'login') {
+            // Require the temporary token we generated in the previous step
+            if (!preAuthToken) return res.status(401).json({ error: "Authentication session missing. Please log in again." });
+
+            try {
+                // Verify the token
+                const decoded = jwt.verify(preAuthToken, process.env.JWT_SECRET);
+                if (decoded.email !== normalizedEmail || !decoded.isPreAuthenticated) {
+                     return res.status(401).json({ error: "Invalid authentication session" });
+                }
+            } catch (err) {
+                return res.status(401).json({ error: "Authentication session expired. Please log in again." });
+            }
+
+            // Token is valid! Fetch user details needed for the email template
+            user = await User.findOne({ email: normalizedEmail }).select("firstName lastName role");
+            if (!user) return res.status(404).json({ error: "User not found" });
+
+        } else if (mode === 'forgot') {
+            user = await User.findOne({ email: normalizedEmail }).select("firstName lastName role");
             if (!user) return res.status(404).json({ error: "No account found with this email" });
-            if (adminLogin && user.role !== 'Admin') return res.status(403).json({ error: 'Invalid admin user' });
+        }
+
+        // Admin check
+        if (user && adminLogin && user.role !== 'Admin') {
+            return res.status(403).json({ error: 'Invalid admin credentials' });
         }
 
         if (!adminLogin) await validateRecaptcha(recaptchaToken);
@@ -503,6 +523,7 @@ export const requestEmailOTP = async (req, res) => {
             return res.status(429).json({ error: "Please wait 60 seconds." });
         }
 
+        // Generate and send OTP
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
         await redisClient.setEx(`otp:email:${normalizedEmail}`, 300, otp);
         const userName = user ? `${user.firstName} ${user.lastName}` : "Valued User";
@@ -516,10 +537,51 @@ export const requestEmailOTP = async (req, res) => {
         if (!mailResult?.success) throw new Error("Email dispatch failed");
 
         await redisClient.setEx(cooldownKey, 60, "locked");
-        return res.status(200).json({ success: true, message: "OTP sent successfully!" });
+        return res.status(200).json({ success: true, message: "Credentials verified. OTP sent successfully!" });
 
     } catch (error) {
         console.error("Email OTP Error:", error);
+        return res.status(500).json({ error: "Internal server error" });
+    }
+};
+
+// 1. NEW: Pre-Verification Endpoint
+export const verifyLoginCredentials = async (req, res) => {
+    try {
+        const { email, password, recaptchaToken } = req.body;
+        
+        if (!email || !password) {
+            return res.status(400).json({ error: "Email and password are required" });
+        }
+
+        const normalizedEmail = String(email).trim().toLowerCase();
+
+        // Optional: Keep Recaptcha here to prevent bot brute-forcing passwords
+        await validateRecaptcha(recaptchaToken); 
+
+        const user = await User.findOne({ email: normalizedEmail }).select("+password");
+        
+        if (!user || !user.password) {
+            return res.status(401).json({ error: "Invalid email or password" });
+        }
+
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) {
+            return res.status(401).json({ error: "Invalid email or password" });
+        }
+
+        // SUCCESS! Generate a temporary 10-minute token
+        // This proves to the next route that the user knows their password
+        const preAuthToken = jwt.sign(
+            { email: normalizedEmail, isPreAuthenticated: true },
+            process.env.JWT_SECRET,
+            { expiresIn: '10m' }
+        );
+
+        return res.status(200).json({ success: true, preAuthToken });
+
+    } catch (error) {
+        console.error("Credential Verification Error:", error);
         return res.status(500).json({ error: "Internal server error" });
     }
 };
@@ -961,7 +1023,6 @@ export const logoutUser = async (req, res) => {
 
                 const sessionDel = await redisClient.del(`session:${token}`);
                 deletedCount += sessionDel;
-                console.debug('[logout] deleted session key, result:', sessionDel);
             } catch (err) {
                 console.error('[logout] Error deleting session from redis:', err?.message || err);
             }
@@ -970,7 +1031,6 @@ export const logoutUser = async (req, res) => {
             try {
                 const decoded = jwt.verify(token, process.env.JWT_SECRET);
                 const userId = decoded.id;
-                console.debug('[logout] decoded JWT, userId:', userId);
 
                 if (userId) {
 
@@ -984,7 +1044,6 @@ export const logoutUser = async (req, res) => {
                             const result = await redisClient.del(k);
                             if (result) {
                                 deletedCount += result;
-                                console.debug(`[logout] deleted key ${k}, result:`, result);
                             }
                         } catch (e) {
                             console.error(`[logout] Error deleting ${k}:`, e?.message || e);
@@ -992,7 +1051,6 @@ export const logoutUser = async (req, res) => {
                     }
                 }
             } catch (verErr) {
-                console.debug('[logout] Token is not a valid JWT or cannot be decoded, ignoring:', verErr?.message);
             }
         }
 
@@ -1000,7 +1058,6 @@ export const logoutUser = async (req, res) => {
         delete cookieClearOptions.maxAge;
 
         res.clearCookie('token', cookieClearOptions);
-        console.debug('[logout] cleared token cookie');
 
         return res.status(200).json({ success: true, message: 'Logged out', deletedKeysCount: deletedCount });
     } catch (error) {
