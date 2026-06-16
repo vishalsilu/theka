@@ -2,15 +2,13 @@ import mongoose from "mongoose";
 import User from "../models/Users.js";
 import Order from "../models/Order.js";
 import Product from "../models/Product.js";
-import SupportTicket from "../models/SupportTicket.js";
 import { v4 as uuidv4 } from 'uuid';
-import crypto from 'crypto';
 import { redisClient } from '../config/redis.js';
 import jwt from "jsonwebtoken";
 import axios from "axios";
 import { sendEmail } from '../config/email.js';
 import { validateRecaptcha } from "../middleware/verifyRecaptcha.js";
-import SiteData from '../models/SiteData.js';
+import SiteData from '../models/SiteData.js'; // Ensure the path points to your actual Mongoose model file
 
 const generateToken = (id) => {
     return jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -21,11 +19,10 @@ const generateToken = (id) => {
 const CART_PREFIX_USER = 'cart:user:';
 const CART_PREFIX_GUEST = 'cart:guest:';
 const TTL_SECONDS = 60 * 60 * 24 * 30;
-const SESSION_TTL = 7 * 24 * 60 * 60;
 const TOKEN_REGEX = /^[a-f0-9]{32}$/i;
-const OTP_TTL = 300;
+const OTP_TTL = 300; // 5 minutes in seconds
 
-
+// --- Internal Helper Functions (Maintained) ---
 function normalizeCartItem(raw) {
     if (!raw || typeof raw !== 'object') return null;
     const productId = String(raw.productId || '').slice(0, 120);
@@ -64,7 +61,6 @@ async function processUserSession(user, req, res, messageSuccess) {
 
     const guestToken = String(req.headers['x-cart-token'] || '').trim();
 
-    // 1. Handle Cart Merging Logic
     const rawUserCart = await redisClient.get(`${CART_PREFIX_USER}${user.id}`);
     let userCartItems = rawUserCart ? sanitizeThinCart(JSON.parse(rawUserCart)) : [];
 
@@ -79,9 +75,6 @@ async function processUserSession(user, req, res, messageSuccess) {
     }
 
     const mergedCart = mergeThinCarts(userCartItems, guestItems);
-    
-    // Perform Redis operations for cart and session index
-    // We use consistent camelCase (sAdd) as required by node-redis v4+
     await redisClient.setEx(`${CART_PREFIX_USER}${user.id}`, TTL_SECONDS, JSON.stringify(mergedCart));
     await redisClient.sAdd('dirty_carts', String(user.id)).catch(() => {});
 
@@ -89,87 +82,90 @@ async function processUserSession(user, req, res, messageSuccess) {
         await redisClient.del(`${CART_PREFIX_GUEST}${guestToken}`).catch(() => {});
     }
 
-    // 2. Session Issuance Logic
-    const sessionToken = crypto.randomBytes(32).toString('hex');
+    const token = generateToken(user.id);
     const jsonUser = JSON.stringify(userData);
 
-    // 
-    // Parallelizing session storage and indexing
+    const TTL = 3600;
     await Promise.all([
-        redisClient.setEx(`user:id:${user.id}`, SESSION_TTL, jsonUser),
-        redisClient.setEx(`user:email:${user.email || ''}`, SESSION_TTL, jsonUser),
-        redisClient.setEx(`user:phone:${user.phone || ''}`, SESSION_TTL, jsonUser),
-        redisClient.setEx(`session:${sessionToken}`, SESSION_TTL, jsonUser),
-        redisClient.sAdd(`user_sessions:${user.id}`, sessionToken),
-        redisClient.expire(`user_sessions:${user.id}`, SESSION_TTL)
-    ]);
+        redisClient.setEx(`user:id:${user.id}`, TTL, jsonUser),
+        redisClient.setEx(`user:email:${user.email || ''}`, TTL, jsonUser),
+        redisClient.setEx(`user:phone:${user.phone || ''}`, TTL, jsonUser),
+        redisClient.setEx(`session:${token}`, TTL, jsonUser)
+    ].filter(p => p));
 
     const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
     const isSecureRequest = req.secure || forwardedProto === 'https';
-    const cookieOptions = {
+    res.cookie('token', token, {
         httpOnly: true,
         secure: isSecureRequest,
         sameSite: isSecureRequest ? 'none' : 'lax',
         path: '/',
-        maxAge: SESSION_TTL * 1000,
-    };
+        maxAge: 30 * 24 * 60 * 60 * 1000
+    });
 
-    res.cookie('token', sessionToken, cookieOptions);
-
-    return res.json({ success: messageSuccess, user: userData });
+    return res.json({ success: messageSuccess, user: userData, token });
 }
 
+// ==========================================
+// UNIFIED EMAIL OTP CONTROLLERS (SMOOTH FLOW)
+// ==========================================
+
+/**
+ * @desc    Step 1: Check Email & Send/Resend Code (Handles both Login & Registration seamlessly)
+ * @route   POST /api/auth/email/send-otp
+ * @access  Public
+ */
 
 export const handleContactUsRequest = async (req, res) => {
     try {
+        // =========================================================
+        // 📥 STEP 1: EXTRACT AND NORMALIZE INPUTS
+        // =========================================================
+        const {userId, name, email, subject, message, recaptchaToken } = req.body;
 
-
-
-        const { userId, name, email, senderEmail, subject, message, recaptchaToken, source } = req.body;
-
-        const normalizedEmail = String(email || senderEmail || '').trim().toLowerCase();
-        const cleanName = String(name).trim();
-        const cleanSubject = String(subject).trim();
-        const cleanMessage = String(message).trim();
-        const ticketSource = String(source || 'contact_form').trim();
-
-        if (!cleanName || !normalizedEmail || !cleanSubject || !cleanMessage) {
+        // Ensure all required fields are provided
+        if (!name || !email || !subject || !message) {
             return res.status(400).json({ error: "All fields (name, email, subject, message) are required." });
         }
 
+        const normalizedEmail = String(email).trim().toLowerCase();
+        const cleanName = String(name).trim();
+        const cleanSubject = String(subject).trim();
+        const cleanMessage = String(message).trim();
 
-
-
+        // =========================================================
+        // 🤖 STEP 2: RECAPTCHA BOT PROTECTION
+        // =========================================================
         try {
             await validateRecaptcha(recaptchaToken);
         } catch (recaptchaError) {
             return res.status(403).json({ error: recaptchaError.message });
         }
 
-
-
-
+        // =========================================================
+        // 📐 STEP 3: STRUCTURAL EMAIL VALIDATION
+        // =========================================================
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         if (!emailRegex.test(normalizedEmail)) {
             return res.status(400).json({ error: "Please provide a valid email address." });
         }
 
-
-
-
+        // =========================================================
+        // 🛡️ STEP 4: ANTI-SPAM COOLDOWN RATE LIMITING (Redis)
+        // =========================================================
         const contactCooldownKey = `cooldown:contact:${normalizedEmail}`;
         const hasSubmittedRecently = await redisClient.get(contactCooldownKey);
 
         if (hasSubmittedRecently) {
-            return res.status(429).json({
-                error: "You have submitted a request recently. Please wait 2 minutes before trying again."
+            return res.status(429).json({ 
+                error: "You have submitted a request recently. Please wait 2 minutes before trying again." 
             });
         }
 
 
-
-
-
+        // =========================================================
+        // 🎨 STEP 5: GENERATE CLEAN EMAIL HTML FOR YOUR TEAM
+        // =========================================================
         const internalEmailHtml = `
         <div style="max-width: 600px; margin: 0 auto; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border: 1px solid #eaeaea;">
             <div style="padding: 30px; background-color: #1d3557; color: #ffffff; text-align: center;">
@@ -207,57 +203,45 @@ export const handleContactUsRequest = async (req, res) => {
         </div>
         `;
 
+        // =========================================================
+        // 🚀 STEP 6: TRANSMIT NOTIFICATION VIA NODEMAILER
+        // =========================================================
+        const siteConfig = await SiteData.findOne({}); 
+        
+        // Fallback to an environment variable or hardcoded fallback if DB string is empty
+        const targetSupportEmail = siteConfig?.contact?.email || "vishalsainig009@gmail.com";
 
-
-
-        const siteConfig = await SiteData.findOne({});
-
-        const targetSupportEmail = siteConfig?.contact?.email || siteConfig?.checkout?.supportEmail || "vishalsainig009@gmail.com";
-
-        if (!siteConfig || !targetSupportEmail) {
-            return res.status(500).json({ error: "Support contact email is not configured properly. Please try again later." });
+        if (!siteConfig || !siteConfig.contact?.email) {
+            return res.status(500).json({error: "Support contact email is not configured properly. Please try again later."});
+            console.warn("⚠️ Warning: contact email not found in SiteData collection. Using fallback mapping.");
         }
 
-        const supportTicket = await SupportTicket.create({
-            userId: userId ? String(userId).trim() : 'Guest',
-            name: cleanName,
-            email: normalizedEmail,
-            subject: cleanSubject,
-            message: cleanMessage,
-            source: ticketSource,
-            status: 'new',
-            mailSent: false
-        });
-
         const mailResult = await sendEmail({
-            to: targetSupportEmail,
-            replyTo: normalizedEmail,
-            subject: `[Contact Us] - ${cleanName} ${userId ? `(ID: ${userId})` : ''} - ${cleanSubject}`,
+            to: targetSupportEmail, 
+            replyTo: normalizedEmail, 
+            subject: `[Contact Us] - ${cleanName} ${userId ? `(ID: ${userId})` : ''} - ${cleanSubject}`, 
             html: internalEmailHtml
         });
 
-        supportTicket.mailSent = Boolean(mailResult?.success);
-        await supportTicket.save();
-
         if (!mailResult || mailResult.success === false) {
-            return res.status(500).json({
+            return res.status(500).json({ 
                 error: "Failed to process your request at this time.",
                 details: mailResult?.error || "Mail transmission handshake failure"
             });
         }
 
-
-
-
+        // =========================================================
+        // 🔒 STEP 7: ACTIVATE 2-MINUTE COOLDOWN ANTI-SPAM LOCK
+        // =========================================================
         await redisClient.setEx(contactCooldownKey, 120, "locked");
 
-        return res.status(200).json({
-            success: true,
-            message: "Your message has been received! Our support team will get back to you shortly."
+        return res.status(200).json({ 
+            success: true, 
+            message: "Your message has been received! Our support team will get back to you shortly." 
         });
 
     } catch (error) {
-
+        // This will now print the actual underlying error to your server terminal logs for debugging
         console.error("Contact Form Pipeline Error Details:", error);
         return res.status(500).json({ error: "Internal server error occurred processing the ticket." });
     }
@@ -265,25 +249,28 @@ export const handleContactUsRequest = async (req, res) => {
 
 export const checkAuthIdentity = async (req, res) => {
     try {
-        const { mode, identifierType = 'email', email, phone, adminLogin } = req.body;
+        const { mode, identifierType, email, phone, adminLogin } = req.body;
 
-        if (!mode || !['login', 'register', 'forgot'].includes(mode)) {
-            return res.status(400).json({ error: 'Auth mode must be login, register, or forgot.' });
+        if (!mode || !['login', 'register'].includes(mode)) {
+            return res.status(400).json({ error: 'Auth mode must be either login or register.' });
+        }
+
+        if (!identifierType || !['email', 'phone'].includes(identifierType)) {
+            return res.status(400).json({ error: 'Identifier type must be email or phone.' });
         }
 
         const normalizedEmail = email ? String(email).trim().toLowerCase() : '';
         const normalizedPhone = phone ? String(phone).trim() : '';
-        const effectiveIdentifierType = identifierType === 'phone' ? 'phone' : 'email';
 
-        if (effectiveIdentifierType === 'email' && !normalizedEmail) {
+        if (identifierType === 'email' && !normalizedEmail) {
             return res.status(400).json({ error: 'Email is required for email authentication.' });
         }
 
-        if (effectiveIdentifierType === 'phone' && !normalizedPhone) {
+        if (identifierType === 'phone' && !normalizedPhone) {
             return res.status(400).json({ error: 'Phone number is required for phone authentication.' });
         }
 
-        const existingUser = effectiveIdentifierType === 'email'
+        const existingUser = identifierType === 'email'
             ? await User.findOne({ email: normalizedEmail })
             : await User.findOne({ phone: normalizedPhone });
 
@@ -315,21 +302,6 @@ export const checkAuthIdentity = async (req, res) => {
             });
         }
 
-        if (mode === 'forgot') {
-            if (!existingUser) {
-                return res.status(404).json({ error: `No account found with this ${identifierType}.` });
-            }
-
-            return res.status(200).json({
-                success: true,
-                exists: true,
-                email: existingUser.email,
-                phone: existingUser.phone,
-                role: existingUser.role,
-                message: 'Account found. Please verify your email with OTP to reset your password.'
-            });
-        }
-
         if (mode === 'register') {
             if (existingUser) {
                 return res.status(409).json({ error: `This ${identifierType} is already registered.` });
@@ -349,135 +321,127 @@ export const checkAuthIdentity = async (req, res) => {
     }
 };
 
-
-
-export const getOTPTemplate = (mode, otp, userName, adminLogin) => {
-    const configs = {
-        login: {
-            title: "Sign-In Verification",
-            message: "We have received a sign-in request for your account. If this was you, please use the OTP below to complete your sign-in.",
-            action: "complete your sign-in"
-        },
-        register: {
-            title: "Welcome to Urban!",
-            message: "Thanks for creating an account with us. Please verify your email address to get started.",
-            action: "complete your registration"
-        },
-        forgot: {
-            title: "Password Reset",
-            message: "We have received a password reset request for your account. If this wasn't you, please ignore this email.",
-            action: "reset your password"
-        },
-
-    };
-
-    const config = configs[mode] || configs.login;
-
-    if (adminLogin) {
-        return `
-    <div style="max-width: 580px; margin: 0 auto; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; color: #334155;">
-        <div style="padding: 30px; text-align: center; background-color: #f8fafc; border-bottom: 1px solid #e2e8f0;">
-            <h2 style="margin: 0; color: #1e293b; font-size: 22px;">Admin Sign-In Verification</h2>
-        </div>
-
-        <div style="padding: 40px 30px; text-align: center;">
-            <p style="font-size: 16px; line-height: 1.5; margin-bottom: 30px;">
-              Dear ${userName},We have received an admin sign-in request for your account. If this was you, please use the OTP below to complete your sign-in. Use the code below to <strong>complete your admin sign-in</strong>:
-            </p>
-            
-            <div style="margin: 20px 0;">
-                <span style="display: block; font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 10px;">Verification Code</span>
-                <div style="background: #eff6ff; border: 2px dashed #3b82f6; border-radius: 12px; padding: 20px; display: inline-block;">
-                    <strong style="font-size: 36px; color: #1d4ed8; letter-spacing: 8px; font-family: monospace;">${otp}</strong>
-                </div>
-            </div>
-
-            <p style="font-size: 14px; color: #64748b; margin-top: 25px;">
-                ⚠️ This code is strictly temporary and will expire in <strong>5 minutes</strong>.
-            </p>
-        </div>
-
-        <div style="padding: 20px; text-align: center; background-color: #f8fafc; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8;">
-            <p style="margin: 0;">Urban Security Team</p>
-            <p style="margin: 5px 0 0 0;">If you didn't request this, please secure your account immediately.</p>
-        </div>
-    </div>`;
-    } else {
-        return `
-    <div style="max-width: 580px; margin: 0 auto; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; color: #334155;">
-        <div style="padding: 30px; text-align: center; background-color: #f8fafc; border-bottom: 1px solid #e2e8f0;">
-            <h2 style="margin: 0; color: #1e293b; font-size: 22px;">${config.title}</h2>
-        </div>
-
-        <div style="padding: 40px 30px; text-align: center;">
-            <p style="font-size: 16px; line-height: 1.5; margin-bottom: 30px;">
-              Dear ${userName}, ${config.message} Use the code below to <strong>${config.action}</strong>:
-            </p>
-            
-            <div style="margin: 20px 0;">
-                <span style="display: block; font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 10px;">Verification Code</span>
-                <div style="background: #eff6ff; border: 2px dashed #3b82f6; border-radius: 12px; padding: 20px; display: inline-block;">
-                    <strong style="font-size: 36px; color: #1d4ed8; letter-spacing: 8px; font-family: monospace;">${otp}</strong>
-                </div>
-            </div>
-
-            <p style="font-size: 14px; color: #64748b; margin-top: 25px;">
-                ⚠️ This code is strictly temporary and will expire in <strong>5 minutes</strong>.
-            </p>
-        </div>
-
-        <div style="padding: 20px; text-align: center; background-color: #f8fafc; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8;">
-            <p style="margin: 0;">Urban Security Team</p>
-            <p style="margin: 5px 0 0 0;">If you didn't request this, please secure your account immediately.</p>
-        </div>
-    </div>`;
-    }
-};
-
 export const requestEmailOTP = async (req, res) => {
     try {
-        const { email, adminLogin, recaptchaToken, mode } = req.body;
+        
+        // =========================================================
+        // 📥 STEP 1: EXTRACT INPUTS FROM THE REQUEST BODY
+        // =========================================================
+        const { email, adminLogin, recaptchaToken } = req.body;
 
-        if (!email) return res.status(400).json({ error: "Email address is required" });
+        // Ensure critical email field is present
+        if (!email) {
+            return res.status(400).json({ error: "Email address is required" });
+        }
+
         const normalizedEmail = String(email).trim().toLowerCase();
 
-        let user = null;
-        if (['login', 'forgot'].includes(mode)) {
-            user = await User.findOne({ email: normalizedEmail }).select("firstName lastName role");
-
-            if (!user) return res.status(404).json({ error: "No account found with this email" });
-            if (adminLogin && user.role !== 'Admin') return res.status(403).json({ error: 'Invalid admin user' });
+        if (!adminLogin) {
+            try {
+                await validateRecaptcha(recaptchaToken);
+            } catch (recaptchaError) {
+                return res.status(403).json({ error: recaptchaError.message });
+            }
         }
 
-        if (!adminLogin) await validateRecaptcha(recaptchaToken);
+        // If this request is specifically for admin login, verify the account is an Admin
+        if (adminLogin) {
+            const adminCheck = await User.findOne({ email: normalizedEmail });
+            if (!adminCheck || adminCheck.role !== 'Admin') {
+                return res.status(403).json({ error: 'Invalid admin user' });
+            }
+        }
 
+
+        // =========================================================
+        // STEP 2: STANDARD STRUCTURAL DATA VALIDATION
+        // =========================================================
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+            return res.status(400).json({ error: "Please enter a valid email address structure" });
+        }
+        
+        // =========================================================
+        // 🛡️ STEP 3: ANTI-SPAM REDIS COOLDOWN SECURITY CHECK
+        // =========================================================
         const cooldownKey = `cooldown:email:${normalizedEmail}`;
-        if (await redisClient.get(cooldownKey)) {
-            return res.status(429).json({ error: "Please wait 60 seconds." });
+        const hasRequestedRecently = await redisClient.get(cooldownKey);
+
+        if (hasRequestedRecently) {
+            return res.status(429).json({ 
+                error: "Please wait 60 seconds before requesting another verification code." 
+            });
         }
 
-        const otp = Math.floor(100000 + Math.random() * 900000).toString();
-        await redisClient.setEx(`otp:email:${normalizedEmail}`, 300, otp);
-        const userName = user ? `${user.firstName} ${user.lastName}` : "Valued User";
+        // =========================================================
+        // STEP 4: OTP GENERATION & REDIS STORAGE
+        // =========================================================
+        const cacheKey = `otp:email:${normalizedEmail}`;
 
+        // Generate clean 6-digit OTP string
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+        // Atomically set/overwrite value and lock a 5-minute TTL duration
+        await redisClient.setEx(cacheKey, OTP_TTL, otp);
+
+        const emailHtml = `
+   <div style="max-width: 600px; margin: 0 auto; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border: 1px solid #eaeaea;">
+  <div style="padding: 40px 30px; text-align: center;">
+    <div style="font-size: 14px; font-weight: bold; color: #4361ee; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 10px;">Security Verification</div>
+    <h1 style="font-size: 28px; color: #1d3557; margin: 0 0 15px 0; font-weight: 700;">Verify Your Identity</h1>
+    <p style="font-size: 16px; color: #4a5568; line-height: 1.6; margin: 0 0 30px 0;">You are receiving this notification because an access verification request was initialized for your account. Use the secure single-use authentication token code below to complete your sign-in process.</p>
+    <div style="background-color: #f8f9fa; border: 2px dashed #cbd5e1; border-radius: 8px; padding: 20px; margin-bottom: 30px; display: inline-block; min-width: 250px;">
+      <span style="font-size: 12px; color: #64748b; display: block; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px;">Your One-Time Password</span>
+      <strong style="font-size: 32px; color: #4361ee; font-family: monospace; letter-spacing: 6px;">${otp}</strong>
+      <span style="font-size: 14px; color: #e63946; display: block; margin-top: 8px; font-weight: bold;">⏰ This temporary code expires strictly in 5 minutes.</span>
+    </div>
+    <div>
+      
+    </div>
+  </div>
+  <div style="background-color: #f8f9fa; padding: 20px; text-align: center; border-top: 1px solid #eaeaea;">
+    <p style="font-size: 12px; color: #94a3b8; margin: 0;">If you did not initiate this authentication request, please ignore this communication or reset your credentials immediately to protect your account security.</p>
+  </div>
+</div>
+`;
+
+        // =========================================================
+        // STEP 5: TRANSMIT EMAIL NODEMAILER SYSTEM
+        // =========================================================
         const mailResult = await sendEmail({
             to: normalizedEmail,
-            subject: adminLogin ? "Your Admin Sign-In OTP Code" : "Your One-Time Verification Code",
-            html: getOTPTemplate(mode, otp, userName, adminLogin)
+            subject: `Urban Account Verification Code: ${otp}`,
+            html: emailHtml
         });
 
-        if (!mailResult?.success) throw new Error("Email dispatch failed");
+        if (!mailResult || mailResult.success === false) {
+            return res.status(500).json({ 
+                error: "Failed to dispatch email verification code",
+                details: mailResult?.error || "SMTP configuration handshake failed"
+            });
+        }
 
+        // =========================================================
+        // 🔒 STEP 6: ACTIVATE COOLDOWN LOCK ONCE SUCCESSFUL
+        // =========================================================
         await redisClient.setEx(cooldownKey, 60, "locked");
-        return res.status(200).json({ success: true, message: "OTP sent successfully!" });
+
+        return res.status(200).json({ 
+            success: true, 
+            message: "Verification OTP dispatched successfully!" 
+        });
 
     } catch (error) {
-        console.error("Email OTP Error:", error);
-        return res.status(500).json({ error: "Internal server error" });
+        console.error("Email OTP Distribution Error:", error);
+        return res.status(500).json({ error: "Internal server error during authentication routing" });
     }
 };
 
-
+/**
+ * @desc    Step 2: Validate OTP and dynamically log in or create user profile
+ * @route   POST /api/auth/email/verify-otp
+ * @access  Public
+ */
 export const verifyEmailOTP = async (req, res) => {
     try {
         const { email, phone, identifierType, otp, adminLogin, mode } = req.body;
@@ -554,49 +518,12 @@ export const verifyEmailOTP = async (req, res) => {
     }
 };
 
-export const resetPassword = async (req, res) => {
-    try {
-        const { email, otp, password } = req.body;
-
-        if (!email || !otp || !password) {
-            return res.status(400).json({ error: 'Email, OTP and new password are required.' });
-        }
-
-        const normalizedEmail = String(email).trim().toLowerCase();
-        const cacheKey = `otp:email:${normalizedEmail}`;
-        const cachedOtp = await redisClient.get(cacheKey);
-
-        if (!cachedOtp) {
-            return res.status(400).json({ error: 'OTP expired or not requested. Please request a new code.' });
-        }
-
-        if (String(cachedOtp).trim() !== String(otp).trim()) {
-            return res.status(400).json({ error: 'Invalid OTP code.' });
-        }
-
-        const user = await User.findOne({ email: normalizedEmail });
-        if (!user) {
-            return res.status(404).json({ error: 'No account exists for that email address.' });
-        }
-
-        await redisClient.del(cacheKey);
-
-        user.password = password.trim();
-        await user.save();
-
-        return await processUserSession(user, req, res, 'Password reset successful.');
-    } catch (error) {
-        console.error('Password Reset Error:', error);
-        return res.status(500).json({ error: 'Internal server error during password reset.' });
-    }
-};
-
 export const completeRegistration = async (req, res) => {
     try {
         const { firstName, lastName, phone, password, registrationToken } = req.body;
 
-        if (!firstName || !password || !registrationToken) {
-            return res.status(400).json({ error: "First name, password, and registration token are required." });
+        if (!firstName || !lastName || !phone || !password || !registrationToken) {
+            return res.status(400).json({ error: "All profile fields, password, and registration token are required." });
         }
 
         let decoded;
@@ -607,37 +534,24 @@ export const completeRegistration = async (req, res) => {
         }
 
         const verifiedEmail = decoded.email;
-        const normalizedPhone = phone ? String(phone).trim() : '';
-        const normalizedFirstName = String(firstName).trim() || `User${Date.now().toString().slice(-4)}`;
-        const normalizedLastName = lastName ? String(lastName).trim() : 'Guest';
 
         let existingUser = await User.findOne({ email: verifiedEmail });
         if (existingUser) {
             return res.status(400).json({ error: "An account with this email address already exists." });
         }
 
-        let finalPhone = normalizedPhone;
-        if (finalPhone) {
-            const phoneExists = await User.exists({ phone: finalPhone });
-            if (phoneExists) {
-                return res.status(400).json({ error: "This phone number is already associated with another account." });
-            }
-        } else {
-            let uniquePhone;
-            do {
-                uniquePhone = `+91${Math.floor(1000000000 + Math.random() * 9000000000)}`;
-            } while (await User.exists({ phone: uniquePhone }));
-            finalPhone = uniquePhone;
+        if (await User.exists({ phone: phone.trim() })) {
+            return res.status(400).json({ error: "This phone number is already associated with another account." });
         }
 
         const generatedId = `USR-${Date.now().toString().slice(-4)}${Math.floor(1000 + Math.random() * 9000)}`;
 
         const newUser = new User({
             id: generatedId,
-            firstName: normalizedFirstName,
-            lastName: normalizedLastName,
+            firstName: firstName.trim(),
+            lastName: lastName.trim(),
             email: verifiedEmail,
-            phone: finalPhone,
+            phone: phone.trim(),
             password: password.trim()
         });
 
@@ -651,14 +565,16 @@ export const completeRegistration = async (req, res) => {
     }
 };
 
-
+// ==========================================
+// REMAINDER SERVICE ENDPOINTS (MAINTAINED)
+// ==========================================
 export const updateUser = async (req, res) => {
     try {
         const { id } = req.user;
-        const { firstName, lastName } = req.body;
-
+        const { firstName, lastName } = req.body; 
+        
         const user = await User.findOne({ id });
-        if (!user) return res.status(404).json({ error: "User not found" });
+        if (!user) return res.status(404).json({ error: "User not found" });    
 
         if (firstName !== undefined) user.firstName = firstName;
         if (lastName !== undefined) user.lastName = lastName;
@@ -670,8 +586,7 @@ export const updateUser = async (req, res) => {
         await Promise.all([
             redisClient.setEx(`user:id:${user.id}`, 3600, jsonUser),
             redisClient.setEx(`user:email:${user.email || ''}`, 3600, jsonUser),
-            redisClient.setEx(`user:phone:${user.phone || ''}`, 3600, jsonUser),
-            redisClient.setEx(`session:${req.cookies.token}`, 3600, jsonUser)
+            redisClient.setEx(`user:phone:${user.phone || ''}`, 3600, jsonUser)
         ]);
 
         return res.status(200).json({ success: "User profile updated successfully", user: userData });
@@ -726,11 +641,11 @@ export const getUserAdmin = async (req, res) => {
 export const updateUserAdmin = async (req, res) => {
     try {
         const { userId } = req.params;
-        const { firstName, lastName, phone, role, email } = req.body;
+        const { firstName, lastName, phone, role,email } = req.body;
         const patch = {};
         if (firstName !== undefined) patch.firstName = String(firstName).trim();
         if (lastName !== undefined) patch.lastName = String(lastName).trim();
-        if (email !== undefined) patch.email = String(email).trim().toLowerCase();
+        if(email !== undefined) patch.email = String(email).trim().toLowerCase();
         if (phone !== undefined) patch.phone = String(phone).trim();
         if (role !== undefined) patch.role = String(role).trim();
 
@@ -745,34 +660,10 @@ export const updateUserAdmin = async (req, res) => {
 export const deleteUserAdmin = async (req, res) => {
     try {
         const { userId } = req.params;
-
-        // 1. Delete user from MongoDB
-        const deletedUser = await User.findOneAndDelete(
-            { id: userId }, 
-            { returnDocument: 'after' }
-        );
-
+        const deletedUser = await User.findOneAndDelete({ id: userId });
         if (!deletedUser) return res.status(404).json({ error: "User not found" });
-
-        // 2. Fetch tokens using the correct node-redis method: sMembers (camelCase)
-        const tokens = await redisClient.sMembers(`user_sessions:${userId}`);
-        
-        if (tokens && tokens.length > 0) {
-            // node-redis uses multi() instead of pipeline()
-            const multi = redisClient.multi();
-            
-            for (const token of tokens) {
-                multi.del(`session:${token}`);
-            }
-            multi.del(`user_sessions:${userId}`);
-            
-            // Execute the batch of commands
-            await multi.exec();
-        }
-
         return res.status(200).json({ success: true, message: "User deleted successfully" });
     } catch (error) {
-        console.error("Error deleting admin user:", error);
         return res.status(500).json({ error: error.message });
     }
 };
@@ -785,7 +676,7 @@ export const addAddress = async (req, res) => {
         const user = await User.findOne({ id: userId });
         if (!user) return res.status(404).json({ error: "User not found" });
         if (user.addresses.length >= 5) return res.status(400).json({ error: "Can't add more than 5 addresses" });
-
+        
         if (user.addresses.length === 0) {
             addressData.isDefault = true;
         } else if (addressData.isDefault === true) {
@@ -800,7 +691,7 @@ export const addAddress = async (req, res) => {
         await user.save();
 
         const keysToInvalidate = [`user:id:${userId}`, `user:email:${user.email || ''}`, `user:phone:${user.phone || ''}`];
-        await redisClient.del(...keysToInvalidate.filter(Boolean)).catch(() => { });
+        await redisClient.del(...keysToInvalidate.filter(Boolean)).catch(() => {});
 
         return res.status(201).json({ success: true, message: "Address added successfully", newAddress });
     } catch (error) {
@@ -836,7 +727,7 @@ export const updateAddress = async (req, res) => {
 
         const user = await User.findOneAndUpdate({ id: userId, "addresses._id": _id }, { $set: updateFields }, { new: true, runValidators: true });
         const keysToInvalidate = [`user:id:${userId}`, `user:email:${user.email || ''}`, `user:phone:${user.phone || ''}`];
-        await redisClient.del(...keysToInvalidate.filter(Boolean)).catch(() => { });
+        await redisClient.del(...keysToInvalidate.filter(Boolean)).catch(() => {});
 
         return res.status(200).json({ success: "Address updated successfully", updatedAddress: user.addresses.id(_id) });
     } catch (error) {
@@ -846,7 +737,7 @@ export const updateAddress = async (req, res) => {
 
 export const deleteAddress = async (req, res) => {
     try {
-        const { id, addressId } = req.params;
+        const { id, addressId } = req.params; 
         if (!id || !addressId) return res.status(400).json({ error: "Missing identification" });
 
         const user = await User.findOne({ id });
@@ -861,7 +752,7 @@ export const deleteAddress = async (req, res) => {
         await user.save();
 
         const keysToInvalidate = [`user:id:${id}`, `user:email:${user.email || ''}`, `user:phone:${user.phone || ''}`];
-        await redisClient.del(...keysToInvalidate.filter(Boolean)).catch(() => { });
+        await redisClient.del(...keysToInvalidate.filter(Boolean)).catch(() => {});
 
         return res.status(200).json({ success: "Address deleted successfully", deletedAddress: addressId });
     } catch (error) {
@@ -871,7 +762,7 @@ export const deleteAddress = async (req, res) => {
 
 export const getAddresses = async (req, res) => {
     try {
-        const { id } = req.params;
+        const { id } = req.params; 
         if (!id) return res.status(401).json({ error: "Please login to continue" });
 
         const cacheKey = `user:addresses:${id}`;
@@ -891,80 +782,579 @@ export const getAddresses = async (req, res) => {
 
 export const getMe = async (req, res) => {
     try {
-        console.log('[server][getMe] cookies:', req.cookies, 'user:', req.user?.id);
-        if (req.user) {
-            return res.status(200).json({ success: true, user: req.user });
-        }
-        return res.status(404).json({ alert: "User not found" });
+        if (req.user) res.status(200).json({ success: true, user: req.user });
+        else res.status(404).json({ alert: "User not found" });
     } catch (error) {
-        console.error('[server][getMe] error:', error);
-        return res.status(500).json({ message: error.message });
+        res.status(500).json({ message: error.message });
     }
 };
 
 export const logoutUser = async (req, res) => {
     try {
-        console.log('[logout] endpoint called');
-        const token = req.cookies?.token || String(req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
-        const isProd = process.env.NODE_ENV === 'production';
-        let deletedCount = 0;
-
-        console.debug('[logout] received token:', token ? `${token.slice(0, 8)}...` : 'none');
-
-        if (token) {
-            try {
-
-                const sessionDel = await redisClient.del(`session:${token}`);
-                deletedCount += sessionDel;
-                console.debug('[logout] deleted session key, result:', sessionDel);
-            } catch (err) {
-                console.error('[logout] Error deleting session from redis:', err?.message || err);
-            }
-
-
-            try {
-                const decoded = jwt.verify(token, process.env.JWT_SECRET);
-                const userId = decoded.id;
-                console.debug('[logout] decoded JWT, userId:', userId);
-
-                if (userId) {
-
-                    const keysToDelete = [
-                        `user:id:${userId}`,
-                        `user:addresses:${userId}`
-                    ];
-
-                    for (const k of keysToDelete) {
-                        try {
-                            const result = await redisClient.del(k);
-                            if (result) {
-                                deletedCount += result;
-                                console.debug(`[logout] deleted key ${k}, result:`, result);
-                            }
-                        } catch (e) {
-                            console.error(`[logout] Error deleting ${k}:`, e?.message || e);
-                        }
-                    }
-                }
-            } catch (verErr) {
-                console.debug('[logout] Token is not a valid JWT or cannot be decoded, ignoring:', verErr?.message);
-            }
-        }
-
-        const isSecureRequest = req.secure || String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase() === 'https';
-        const cookieClearOptions = {
+        const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+        const isSecureRequest = req.secure || forwardedProto === 'https';
+        res.clearCookie('token', {
             path: '/',
             secure: isSecureRequest,
             sameSite: isSecureRequest ? 'none' : 'lax',
-        };
-
-        res.clearCookie('token', cookieClearOptions);
-        console.debug('[logout] cleared token cookie');
-
-        return res.status(200).json({ success: true, message: 'Logged out', deletedKeysCount: deletedCount });
+        });
+        return res.status(200).json({ success: true, message: 'Logged out' });
     } catch (error) {
-        console.error('[logout] Error in logoutUser:', error?.message || error);
         return res.status(500).json({ error: 'Failed to logout' });
     }
 };
 
+// import mongoose from "mongoose";
+// import User from "../models/Users.js";
+// import Order from "../models/Order.js";
+// import Product from "../models/Product.js";
+// import bcrypt from "bcryptjs"
+// import { v4 as uuidv4 } from 'uuid';
+// import { redisClient } from '../config/redis.js';
+// import jwt from "jsonwebtoken"
+
+// const generateToken = (id) => {
+//     return jwt.sign({ id }, process.env.JWT_SECRET, {
+//         expiresIn: '30d', // Token lasts for 30 days
+//     });
+// };
+
+// const CART_PREFIX_USER = 'cart:user:';
+// const CART_PREFIX_GUEST = 'cart:guest:';
+// const TTL_SECONDS = 60 * 60 * 24 * 30;
+// const TOKEN_REGEX = /^[a-f0-9]{32}$/i;
+
+// function normalizeCartItem(raw) {
+//     if (!raw || typeof raw !== 'object') return null;
+
+//     const productId = String(raw.productId || '').slice(0, 120);
+//     const variantId = Number(raw.variantId ?? raw.varient) || 0;
+//     const size = String(raw.size || '').slice(0, 20);
+//     const quantity = Math.min(10, Math.max(1, Number(raw.quantity) || 1));
+//     const varient = String((raw.varient ?? raw.variant ?? variantId) || '').slice(0, 120);
+
+//     if (!productId) return null;
+//     return { productId, variantId, size, quantity, varient };
+// }
+
+// function sanitizeThinCart(items) {
+//     if (!Array.isArray(items)) return [];
+//     return items
+//         .slice(0, 50)
+//         .map(normalizeCartItem)
+//         .filter(Boolean);
+// }
+
+// function mergeThinCarts(primary = [], secondary = []) {
+//     const merged = new Map();
+
+//     for (const raw of [...primary, ...secondary]) {
+//         const item = normalizeCartItem(raw);
+//         if (!item) continue;
+
+//         const key = `${item.productId}:${item.variantId}:${item.size}`;
+//         const existing = merged.get(key);
+
+//         if (existing) {
+//             existing.quantity = Math.min(99, existing.quantity + item.quantity);
+//         } else {
+//             merged.set(key, item);
+//         }
+//     }
+
+//     return [...merged.values()];
+// }
+
+// export const registerUser = async (req, res) => {
+//     const { firstName, lastName, email, phone, password } = req.body;
+//     const id = `USR-${Date.now().toString().slice(-4)}${Math.floor(1000 + Math.random() * 9000)}`;
+
+//     try {
+//         // Check existence in parallel
+//         const [emailExists, phoneExists] = await Promise.all([
+//             User.exists({ email }),
+//             User.exists({ phone })
+//         ]);
+
+//         if (emailExists || phoneExists) {
+//             return res.status(400).json({ error: "Email or Phone already taken" });
+//         }
+
+//         const newUser = new User({ id, firstName, lastName, email, phone, password });
+//         const savedUser = await newUser.save();
+
+//         const userData = savedUser.toObject();
+//         delete userData.password;
+
+//         const token = generateToken(savedUser.id);
+//         const jsonUser = JSON.stringify(userData);
+
+//         // Seed all cache keys immediately
+//         await Promise.all([
+//             redisClient.setEx(`user:id:${savedUser.id}`, 3600, jsonUser),
+//             redisClient.setEx(`user:email:${savedUser.email}`, 3600, jsonUser),
+//             redisClient.setEx(`user:phone:${savedUser.phone}`, 3600, jsonUser)
+//         ]);
+
+//         const guestToken = String(req.headers['x-cart-token'] || '').trim();
+//         if (guestToken && TOKEN_REGEX.test(guestToken)) {
+//             const rawGuest = await redisClient.get(`${CART_PREFIX_GUEST}${guestToken}`);
+//             if (rawGuest) {
+//                 const guestItems = sanitizeThinCart(JSON.parse(rawGuest));
+//                 if (guestItems.length) {
+//                     await redisClient.setEx(`${CART_PREFIX_USER}${savedUser.id}`, TTL_SECONDS, JSON.stringify(guestItems));
+//                     await redisClient.sAdd('dirty_carts', String(savedUser.id)).catch(() => {});
+//                     await redisClient.del(`${CART_PREFIX_GUEST}${guestToken}`).catch(() => {});
+//                 }
+//             }
+//         }
+
+//         // Set httpOnly cookie for browser-based clients (Admin panel)
+//         const isProd = process.env.NODE_ENV === 'production';
+//         res.cookie('token', token, {
+//             httpOnly: true,
+//             secure: isProd,
+//             sameSite: 'lax',
+//             maxAge: 30 * 24 * 60 * 60 * 1000
+//         });
+
+//         return res.status(201).json({ success: "Registered", user: userData, token });
+//     } catch (error) {
+//         return res.status(500).json({ error: "Internal Server Error" });
+//     }
+// };
+
+// export const loginUser = async (req, res) => {
+//     try {
+//         const { email, phone, password } = req.body;
+//         if (!password || (!email && !phone)) {
+//             return res.status(400).json({ error: "Credentials missing" });
+//         }
+
+//         // 1. We ALWAYS need the password from DB for a safe login
+//         // Caching passwords is risky. Login is the one place where a DB hit is fine.
+//         const query = email ? { email } : { phone };
+//         const user = await User.findOne(query).select('+password');
+
+//         if (!user) return res.status(401).json({ error: "Invalid Credentials" });
+
+//         // 2. Compare password
+//         const isMatch = await user.comparePassword(password);
+//         if (!isMatch) return res.status(401).json({ error: "Invalid Credentials" });
+
+//         // 3. Prepare data for response & cache
+//         const userData = user.toObject();
+//         delete userData.password;
+
+//         const guestToken = String(req.headers['x-cart-token'] || '').trim();
+
+//         const rawUserCart = await redisClient.get(`${CART_PREFIX_USER}${user.id}`);
+//         let userCartItems = rawUserCart ? sanitizeThinCart(JSON.parse(rawUserCart)) : [];
+
+//         if (!userCartItems.length && Array.isArray(user.cart)) {
+//             userCartItems = user.cart.map(normalizeCartItem).filter(Boolean);
+//         }
+
+//         let guestItems = [];
+//         if (guestToken && TOKEN_REGEX.test(guestToken)) {
+//             const rawGuest = await redisClient.get(`${CART_PREFIX_GUEST}${guestToken}`);
+//             guestItems = rawGuest ? sanitizeThinCart(JSON.parse(rawGuest)) : [];
+//         }
+
+//         const mergedCart = mergeThinCarts(userCartItems, guestItems);
+//         await redisClient.setEx(`${CART_PREFIX_USER}${user.id}`, TTL_SECONDS, JSON.stringify(mergedCart));
+//         await redisClient.sAdd('dirty_carts', String(user.id)).catch(() => {});
+
+//         if (guestToken && TOKEN_REGEX.test(guestToken)) {
+//             await redisClient.del(`${CART_PREFIX_GUEST}${guestToken}`).catch(() => {});
+//         }
+
+//         const token = generateToken(user.id);
+//         const jsonUser = JSON.stringify(userData);
+
+//         // 4. Update/Seed all cache aliases so other routes (profile, cart) are fast
+//         const TTL = 3600;
+//         await Promise.all([
+//             redisClient.setEx(`user:id:${user.id}`, TTL, jsonUser),
+//             redisClient.setEx(`user:email:${user.email}`, TTL, jsonUser),
+//             redisClient.setEx(`user:phone:${user.phone}`, TTL, jsonUser)
+//         ]);
+
+//         // Set httpOnly cookie for browser-based clients (Admin panel)
+//         const isProd = process.env.NODE_ENV === 'production';
+//         res.cookie('token', token, {
+//             httpOnly: true,
+//             secure: isProd,
+//             sameSite: 'lax',
+//             maxAge: 30 * 24 * 60 * 60 * 1000
+//         });
+
+//         return res.json({ success: "Login Successful", user: userData, token });
+//     } catch (error) {
+//         return res.status(500).json({ error: error.message });
+//     }
+// };
+
+
+// export const updateUser = async (req, res) => {
+//     try {
+//         const { id } = req.user;
+//         const { firstName, lastName } = req.body; // Explicitly pull only the fields you want to update
+        
+//         // 1. Fetch the document first to safely trigger 'save' middleware later
+//         const user = await User.findOne({ id });
+//         if (!user) {
+//             return res.status(404).json({ error: "User not found" });    
+//         }
+
+//         // 2. Apply modifications only if they are passed in the request body
+//         if (firstName !== undefined) user.firstName = firstName;
+//         if (lastName !== undefined) user.lastName = lastName;
+
+//         // 3. Save the document (This safely fires all validation and your pre('save') hooks)
+//         await user.save();
+
+//         // 4. Convert to Object to respect your virtuals config (like fullName)
+//         const userData = user.toObject();
+//         const jsonUser = JSON.stringify(userData);
+
+//         // 5. Atomic cache update across all user identifiers
+//         await Promise.all([
+//             redisClient.setEx(`user:id:${user.id}`, 3600, jsonUser),
+//             redisClient.setEx(`user:email:${user.email}`, 3600, jsonUser),
+//             redisClient.setEx(`user:phone:${user.phone}`, 3600, jsonUser)
+//         ]);
+
+//         return res.status(200).json({ 
+//             success: "User profile updated successfully", 
+//             user: userData 
+//         });
+
+//     } catch (error) {
+//         return res.status(500).json({ 
+//             error:error.message || "Internal Server Error"    });
+//     }
+// };
+
+// export const getAllUsersAdmin = async (req, res) => {
+//     try {
+//         const { q, role, sortBy, sortOrder } = req.query;
+//         const query = {};
+
+//         if (role && role !== "All") {
+//             query.role = String(role).trim();
+//         }
+
+//         if (q) {
+//             const search = new RegExp(String(q).trim(), "i");
+//             query.$or = [
+//                 { id: search },
+//                 { firstName: search },
+//                 { lastName: search },
+//                 { email: search },
+//                 { phone: search },
+//                 { role: search }
+//             ];
+//         }
+
+//         const field = sortBy === "email" ? "email" : "createdAt";
+//         const direction = sortOrder === "asc" ? 1 : -1;
+//         const users = await User.find(query).select("-password -__v").sort({ [field]: direction }).lean();
+
+//         return res.status(200).json({ success: true, users });
+//     } catch (error) {
+//         return res.status(500).json({ error: error.message });
+//     }
+// };
+
+// export const getUserAdmin = async (req, res) => {
+//     try {
+//         const { userId } = req.params;
+//         const user = await User.findOne({ id: userId }).select("-password -__v").lean();
+//         if (!user) return res.status(404).json({ error: "User not found" });
+
+//         const orders = await Order.find({ userId }).sort({ createdAt: -1 }).lean();
+//         const cartItems = Array.isArray(user.cart) ? user.cart : [];
+//         const cart = await Promise.all(cartItems.map(async (item) => {
+//             const product = await Product.findOne({ id: item.productId }).lean();
+//             return {
+//                 ...item,
+//                 name: product?.name || item.productId,
+//                 price: Number(product?.price || 0)
+//             };
+//         }));
+
+//         return res.status(200).json({ success: true, user, orders, cart });
+//     } catch (error) {
+//         return res.status(500).json({ error: error.message });
+//     }
+// };
+
+// export const updateUserAdmin = async (req, res) => {
+//     try {
+//         const { userId } = req.params;
+//         const { firstName, lastName, phone, role } = req.body;
+//         const patch = {};
+
+//         if (firstName !== undefined) patch.firstName = String(firstName).trim();
+//         if (lastName !== undefined) patch.lastName = String(lastName).trim();
+//         if (phone !== undefined) patch.phone = String(phone).trim();
+//         if (role !== undefined) patch.role = String(role).trim();
+
+//         const user = await User.findOneAndUpdate({ id: userId }, patch, { new: true }).select("-password -__v").lean();
+//         if (!user) return res.status(404).json({ error: "User not found" });
+
+//         return res.status(200).json({ success: true, user });
+//     } catch (error) {
+//         return res.status(500).json({ error: error.message });
+//     }
+// };
+
+// export const deleteUserAdmin = async (req, res) => {
+//     try {
+//         const { userId } = req.params;
+//         const deletedUser = await User.findOneAndDelete({ id: userId });
+//         if (!deletedUser) return res.status(404).json({ error: "User not found" });
+
+//         return res.status(200).json({ success: true, message: "User deleted successfully" });
+//     } catch (error) {
+//         return res.status(500).json({ error: error.message });
+//     }
+// };
+
+// export const addAddress = async (req, res) => {
+//     try {
+//         const { userId, ...addressData } = req.body;
+
+//         if (!userId) {
+//             return res.status(401).json({ error: "Please login again to continue" });
+//         }
+
+//         const user = await User.findOne({ id: userId });
+//         if (!user) {
+//             return res.status(404).json({ error: "User not found" });
+//         }
+// if(user.addresses.length >=5 ) return res.status(400).json({error : "Can't add more than 5 addresses"})
+//         // LOGIC 1: If this is the first address, make it default
+//         if (user.addresses.length === 0) {
+//             addressData.isDefault = true;
+//         } 
+//         // LOGIC 1: If adding new address with isDefault=true, set all others to false
+//         else if (addressData.isDefault === true) {
+//             // Use MongoDB operator to set all other addresses to false
+//             await User.updateOne(
+//                 { id: userId },
+//                 { $set: { "addresses.$[].isDefault": false } }
+//             );
+//             // Refresh the user object to get updated addresses
+//             const refreshedUser = await User.findOne({ id: userId });
+//             if (refreshedUser) {
+//                 user.addresses = refreshedUser.addresses;
+//             }
+//         }
+
+//         const _id = new mongoose.Types.ObjectId();
+//         const newAddress = { 
+//             ...addressData, 
+//             _id,
+//             country: addressData.country || 'India' // Fallback to default
+//         };
+        
+//         // 5. Push and Save
+//         user.addresses.push(newAddress);
+     
+//         await user.save();
+
+//         const keysToInvalidate = [
+//             `user:id:${userId}`,
+//             `user:email:${user.email}`,
+//             `user:phone:${user.phone}`
+//         ];
+
+//         try {
+//             await redisClient.del(...keysToInvalidate.filter(Boolean));
+//         } catch (redisError) {
+//             console.error("Redis Cache Clear Error:", redisError);
+//         }
+
+//         // 7. Success Response
+//         return res.status(201).json({
+//             success: true,
+//             message: "Address added successfully",
+//             newAddress: newAddress
+//         });
+
+//     } catch (error) {
+//         console.error(`Address Adding Error: ${error}`);
+        
+//         if (error.name === 'ValidationError') {
+//             return res.status(400).json({ 
+//                 error: "Validation Failed", 
+//                 details: error.message 
+//             });
+//         }
+
+//         return res.status(500).json({ error: "Internal Server Error" });
+//     }
+// };
+
+// export const updateAddress = async (req, res) => {
+//     try {
+//         const { _id, userId, ...updatedAddressData } = req.body;
+
+//         if (!userId) return res.status(401).json({ error: "Please login again" });
+
+//         // 1. Fetch current user to check address state
+//         const currentUser = await User.findOne({ id: userId });
+//         if (!currentUser) return res.status(404).json({ error: "User not found" });
+
+//         const targetAddress = currentUser.addresses.id(_id);
+//         if (!targetAddress) return res.status(404).json({ error: "Address not found" });
+
+//         if (updatedAddressData.isDefault === false && targetAddress.isDefault === true) {
+//             const otherDefaults = currentUser.addresses.filter(
+//                 (addr) => addr._id.toString() !== _id && addr.isDefault === true
+//             );
+            
+//             if (otherDefaults.length === 0) {
+//                 return res.status(400).json({ 
+//                     error: "At least one address must be set as default. Please set another address as default first." 
+//                 });
+//             }
+//         }
+
+//         // 3. Handle the "Switching Default" logic
+//         if (updatedAddressData.isDefault === true) {
+//             // Set all addresses for this user to false first
+//             await User.updateOne(
+//                 { id: userId },
+//                 { $set: { "addresses.$[].isDefault": false } } 
+//             );
+//         }
+
+//         // 4. Build the update object
+//         const updateFields = {};
+//         for (const key in updatedAddressData) {
+//             updateFields[`addresses.$.${key}`] = updatedAddressData[key];
+//         }
+
+//         // 5. Update the specific address
+//         const user = await User.findOneAndUpdate(
+//             { id: userId, "addresses._id": _id },
+//             { $set: updateFields },
+//             { new: true, runValidators: true }
+//         );
+
+//         // Cache Invalidation
+//         const keysToInvalidate = [`user:id:${userId}`, `user:email:${user.email}`, `user:phone:${user.phone}`];
+//         await redisClient.del(...keysToInvalidate.filter(Boolean)).catch(() => {});
+
+//         return res.status(200).json({ 
+//             success: "Address updated successfully",
+//             updatedAddress: user.addresses.id(_id) 
+//         });
+
+//     } catch (error) {
+//         console.error("Update Address Error:", error);
+//         return res.status(500).json({ error: "Internal Server Error" });
+//     }
+// };
+
+
+// export const deleteAddress = async (req, res) => {
+//     try {
+//         const { id, addressId } = req.params; 
+
+//         if (!id || !addressId) {
+//             return res.status(400).json({ error: "Missing identification" });
+//         }
+
+//         // 1. Find user and check if address is default
+//         const user = await User.findOne({ id: id });
+//         if (!user) return res.status(404).json({ error: "User not found" });
+
+//         const addressToDelete = user.addresses.id(addressId);
+//         if (!addressToDelete) return res.status(404).json({ error: "Address not found" });
+
+//         // CRITICAL CHECK: Block deletion if default
+//         if (addressToDelete.isDefault) {
+//             return res.status(400).json({ 
+//                 error: "You cannot delete your primary address. Please set another address as default first." 
+//             });
+//         }
+
+//         // 2. Proceed with deletion
+//         user.addresses.pull(addressId);
+//         await user.save();
+
+//         // Cache Invalidation
+//         const keysToInvalidate = [`user:id:${id}`, `user:email:${user.email}`, `user:phone:${user.phone}`];
+//         await redisClient.del(...keysToInvalidate.filter(Boolean)).catch(() => {});
+
+//         return res.status(200).json({ success: "Address deleted successfully", deletedAddress: addressId });
+
+//     } catch (error) {
+//         return res.status(500).json({ error: "Internal Server Error" });
+//     }
+// };
+
+// export const getAddresses = async (req, res) => {
+//     try {
+//         const { id } = req.params; 
+        
+//         if (!id) return res.status(401).json({ error: "Please login to continue" });
+
+//         const cacheKey = `user:addresses:${id}`;
+//         const cachedAddresses = await redisClient.get(cacheKey);
+
+//         if (cachedAddresses) {
+//             return res.status(200).json({
+//                 success: true,
+//                 addresses: JSON.parse(cachedAddresses)
+//             });
+//         }
+
+//         // 2. Cache Miss - Go to MongoDB
+//         const user = await User.findOne({ id: id });
+
+//         if (!user) {
+//             return res.status(404).json({ error: "User not found" });
+//         }
+
+//         // 3. Save to Redis for next time (Cache for 1 hour)
+//         await redisClient.setEx(cacheKey, 3600, JSON.stringify(user.addresses));
+
+//         return res.status(200).json({
+//             success: true,
+//             addresses: user.addresses
+//         });
+
+//     } catch (error) {
+//         return res.status(500).json({ error: error.message });
+//     }
+// };
+
+// export const getMe = async (req, res) => {
+//     try {
+//         // req.user was populated by the 'protect' middleware
+//         if (req.user) {
+//             res.status(200).json({
+//                 success: true,
+//                 user: req.user
+//             });
+//         } else {
+//             res.status(404).json({ alert: "User not found" });
+//         }
+//     } catch (error) {
+//         res.status(500).json({ message: error.message });
+//     }
+// };
+
+// export const logoutUser = async (req, res) => {
+//     try {
+//         res.clearCookie('token');
+//         return res.status(200).json({ success: true, message: 'Logged out' });
+//     } catch (error) {
+//         return res.status(500).json({ error: 'Failed to logout' });
+//     }
+// };

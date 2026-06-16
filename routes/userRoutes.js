@@ -9,7 +9,6 @@ import {
     logoutUser,
     requestEmailOTP,
     verifyEmailOTP,
-    resetPassword,
     completeRegistration,
     checkAuthIdentity,
     getAllUsersAdmin,
@@ -27,7 +26,6 @@ const routes = express.Router()
 routes.post('/email/check-identity', checkAuthIdentity);
 routes.post('/email/send-otp', otpLimiter, requestEmailOTP);
 routes.post('/email/verify-otp', verifyEmailOTP);
-routes.post('/email/reset-password', resetPassword);
 routes.post('/email/complete-registration', completeRegistration);
 
 routes.post('/email/contact',  handleContactUsRequest);
