@@ -39,10 +39,10 @@ const buildCookieOptions = (req) => {
         maxAge: SESSION_TTL * 1000,
     };
 
-    const cookieDomain = String(process.env.COOKIE_DOMAIN || '').trim();
-    if (cookieDomain) {
-        cookieOptions.domain = cookieDomain;
-    }
+    // const cookieDomain = String(process.env.COOKIE_DOMAIN || '').trim();
+    // if (cookieDomain) {
+    //     cookieOptions.domain = cookieDomain;
+    // }
 
     return cookieOptions;
 };
