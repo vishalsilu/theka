@@ -62,24 +62,46 @@ app.set('trust proxy', 1);
 
 app.use(cors({
   origin: function (origin, callback) {
-    if (!origin) {
-      return callback(null, true);
-    }
-
-    const allowed = allowedOrigins.includes(origin)
-      || allowedOriginPatterns.some((pattern) => pattern.test(origin));
+    if (!origin) return callback(null, true);
+    
+    // Check if it's one of your allowed origins or a pattern
+    const allowed = allowedOrigins.includes(origin) || 
+                    allowedOriginPatterns.some((pattern) => pattern.test(origin));
 
     if (allowed) {
-      return callback(null, true);
+      callback(null, true);
+    } else {
+      callback(new Error(`CORS Policy Blocked This Request: ${origin}`));
     }
-
-    callback(new Error(`CORS Policy Blocked This Request: ${origin}`));
   },
-  credentials: true, // REQUIRED for cookies
-  // Ensure these headers match exactly what you are sending
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-id', 'x-cart-token'],
+  credentials: true,
+  // Add 'Set-Cookie' to allowed headers just in case, 
+  // though usually not required for requests, it helps with transparency.
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-id', 'x-cart-token', 'Cookie'], 
   exposedHeaders: ['Set-Cookie']
 }));
+
+
+// app.use(cors({
+//   origin: function (origin, callback) {
+//     if (!origin) {
+//       return callback(null, true);
+//     }
+
+//     const allowed = allowedOrigins.includes(origin)
+//       || allowedOriginPatterns.some((pattern) => pattern.test(origin));
+
+//     if (allowed) {
+//       return callback(null, true);
+//     }
+
+//     callback(new Error(`CORS Policy Blocked This Request: ${origin}`));
+//   },
+//   credentials: true, // REQUIRED for cookies
+//   // Ensure these headers match exactly what you are sending
+//   allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-id', 'x-cart-token'],
+//   exposedHeaders: ['Set-Cookie']
+// }));
 app.use(express.json());
 // Parse cookies for cookie-based auth
 
