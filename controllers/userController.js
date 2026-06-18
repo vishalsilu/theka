@@ -86,6 +86,50 @@ function mergeThinCarts(primary = [], secondary = []) {
     return [...merged.values()];
 }
 
+const syncUserCacheAndSession = async (user, req) => {
+    try {
+        const userData = user.toObject();
+        delete userData.password; 
+        const jsonUser = JSON.stringify(userData);
+
+        // 1. EXTRACT TOKEN SAFELY
+        let token = req.cookies?.token;
+        if (!token && req.headers.authorization?.toLowerCase().startsWith('bearer ')) {
+            token = req.headers.authorization.split(' ')[1];
+        }
+
+        // 2. SAFELY REBUILD THE SESSION PAYLOAD
+        let updatedSessionString = null;
+        if (token) {
+            const sessionKey = `session:${token}`;
+            const existingSessionStr = await redisClient.get(sessionKey);
+            
+            if (existingSessionStr) {
+                const existingSession = JSON.parse(existingSessionStr);
+                // CRITICAL: Keep existing fingerprint, update ONLY the user object
+                existingSession.user = userData; 
+                updatedSessionString = JSON.stringify(existingSession);
+            }
+        }
+
+        // 3. UPDATE REDIS CACHES
+        const redisPromises = [
+            redisClient.setEx(`user:id:${user.id}`, 3600, jsonUser),
+            redisClient.setEx(`user:email:${user.email || ''}`, 3600, jsonUser),
+            redisClient.setEx(`user:phone:${user.phone || ''}`, 3600, jsonUser)
+        ];
+
+        // ONLY update the session if we successfully found and wrapped it
+        if (token && updatedSessionString) {
+            redisPromises.push(redisClient.setEx(`session:${token}`, 3600, updatedSessionString));
+        }
+
+        await Promise.all(redisPromises);
+    } catch (err) {
+        console.error("Failed to sync user session to Redis:", err);
+    }
+};
+
 async function processUserSession(user, req, res, messageSuccess) {
     const userData = user.toObject();
     delete userData.password;
@@ -478,74 +522,9 @@ export const getOTPTemplate = (mode, otp, userName, adminLogin) => {
     }
 };
 
-export const requestEmailOTP = async (req, res) => {
-    try {
-        // We replaced 'password' with 'preAuthToken'
-        const { email, adminLogin, recaptchaToken, mode, preAuthToken } = req.body;
-
-        if (!email) return res.status(400).json({ error: "Email address is required" });
-        const normalizedEmail = String(email).trim().toLowerCase();
-
-        let user = null;
-
-        if (mode === 'login') {
-            // Require the temporary token we generated in the previous step
-            if (!preAuthToken) return res.status(401).json({ error: "Authentication session missing. Please log in again." });
-
-            try {
-                // Verify the token
-                const decoded = jwt.verify(preAuthToken, process.env.JWT_SECRET);
-                if (decoded.email !== normalizedEmail || !decoded.isPreAuthenticated) {
-                     return res.status(401).json({ error: "Invalid authentication session" });
-                }
-            } catch (err) {
-                return res.status(401).json({ error: "Authentication session expired. Please log in again." });
-            }
-
-            // Token is valid! Fetch user details needed for the email template
-            user = await User.findOne({ email: normalizedEmail }).select("firstName lastName role");
-            if (!user) return res.status(404).json({ error: "User not found" });
-
-        } else if (mode === 'forgot') {
-            user = await User.findOne({ email: normalizedEmail }).select("firstName lastName role");
-            if (!user) return res.status(404).json({ error: "No account found with this email" });
-        }
-
-        // Admin check
-        if (user && adminLogin && user.role !== 'Admin') {
-            return res.status(403).json({ error: 'Invalid admin credentials' });
-        }
-
-        if (!adminLogin) await validateRecaptcha(recaptchaToken);
-
-        const cooldownKey = `cooldown:email:${normalizedEmail}`;
-        if (await redisClient.get(cooldownKey)) {
-            return res.status(429).json({ error: "Please wait 60 seconds." });
-        }
-
-        // Generate and send OTP
-        const otp = Math.floor(100000 + Math.random() * 900000).toString();
-        await redisClient.setEx(`otp:email:${normalizedEmail}`, 300, otp);
-        const userName = user ? `${user.firstName} ${user.lastName}` : "Valued User";
-
-        const mailResult = await sendEmail({
-            to: normalizedEmail,
-            subject: adminLogin ? "Your Admin Sign-In OTP Code" : "Your One-Time Verification Code",
-            html: getOTPTemplate(mode, otp, userName, adminLogin)
-        });
-
-        if (!mailResult?.success) throw new Error("Email dispatch failed");
-
-        await redisClient.setEx(cooldownKey, 60, "locked");
-        return res.status(200).json({ success: true, message: "Credentials verified. OTP sent successfully!" });
-
-    } catch (error) {
-        console.error("Email OTP Error:", error);
-        return res.status(500).json({ error: "Internal server error" });
-    }
-};
 
 // 1. NEW: Pre-Verification Endpoint
+
 export const verifyLoginCredentials = async (req, res) => {
     try {
         const { email, password, recaptchaToken } = req.body;
@@ -586,14 +565,81 @@ export const verifyLoginCredentials = async (req, res) => {
     }
 };
 
+export const requestEmailOTP = async (req, res) => {
+    try {
+        const { email, adminLogin, recaptchaToken, mode, preAuthToken, password } = req.body;
+
+        if (!email) return res.status(400).json({ error: "Email address is required" });
+        const normalizedEmail = String(email).trim().toLowerCase();
+
+        let user = null;
+
+        if (mode === 'login') {
+            if (!preAuthToken) return res.status(401).json({ error: "Authentication session missing. Please log in again." });
+
+            try {
+                const decoded = jwt.verify(preAuthToken, process.env.JWT_SECRET);
+                if (decoded.email !== normalizedEmail || !decoded.isPreAuthenticated) {
+                     return res.status(401).json({ error: "Invalid authentication session" });
+                }
+            } catch (err) {
+                return res.status(401).json({ error: "Authentication session expired. Please log in again." });
+            }
+
+            user = await User.findOne({ email: normalizedEmail }).select("firstName lastName role");
+            if (!user) return res.status(404).json({ error: "User not found" });
+
+        } else if (mode === 'forgot') {
+            user = await User.findOne({ email: normalizedEmail }).select("firstName lastName role");
+            if (!user) return res.status(404).json({ error: "No account found with this email" });
+            
+        } else if (mode === 'register') {
+            const existingUser = await User.findOne({ email: normalizedEmail });
+            if (existingUser) return res.status(400).json({ error: "An account with this email already exists" });
+            
+            if (!password) return res.status(400).json({ error: "Password is required for registration" });
+            
+            // Store password temporarily for Step 2
+            await redisClient.setEx(`pending:pwd:${normalizedEmail}`, 300, password);
+        }
+
+        if (user && adminLogin && user.role !== 'Admin') {
+            return res.status(403).json({ error: 'Invalid admin credentials' });
+        }
+
+        if (!adminLogin) await validateRecaptcha(recaptchaToken);
+
+        const cooldownKey = `cooldown:email:${normalizedEmail}`;
+        if (await redisClient.get(cooldownKey)) {
+            return res.status(429).json({ error: "Please wait 60 seconds." });
+        }
+
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        await redisClient.setEx(`otp:email:${normalizedEmail}`, 300, otp);
+        const userName = user ? `${user.firstName} ${user.lastName}` : "Valued User";
+
+        const mailResult = await sendEmail({
+            to: normalizedEmail,
+            subject: adminLogin ? "Your Admin Sign-In OTP Code" : "Your One-Time Verification Code",
+            html: getOTPTemplate(mode, otp, userName, adminLogin)
+        });
+
+        if (!mailResult?.success) throw new Error("Email dispatch failed");
+
+        await redisClient.setEx(cooldownKey, 60, "locked");
+        return res.status(200).json({ success: true, message: "Credentials verified. OTP sent successfully!" });
+
+    } catch (error) {
+        console.error("Email OTP Error:", error);
+        return res.status(500).json({ error: "Internal server error" });
+    }
+};
 
 export const verifyEmailOTP = async (req, res) => {
     try {
         const { email, phone, identifierType, otp, adminLogin, mode } = req.body;
 
-        if (!otp) {
-            return res.status(400).json({ error: "OTP code is required." });
-        }
+        if (!otp) return res.status(400).json({ error: "OTP code is required." });
 
         const normalizedEmail = email ? String(email).trim().toLowerCase() : '';
         const normalizedPhone = phone ? String(phone).trim() : '';
@@ -602,64 +648,137 @@ export const verifyEmailOTP = async (req, res) => {
         let user = null;
 
         if (identifierType === 'phone') {
-            if (!normalizedPhone) {
-                return res.status(400).json({ error: 'Phone is required when using phone authentication.' });
-            }
+            if (!normalizedPhone) return res.status(400).json({ error: 'Phone is required.' });
             user = await User.findOne({ phone: normalizedPhone });
-            if (user) {
-                lookupEmail = user.email;
-            }
+            if (user) lookupEmail = user.email;
         }
 
-        if (!lookupEmail) {
-            return res.status(400).json({ error: 'Email is required for OTP validation.' });
-        }
+        if (!lookupEmail) return res.status(400).json({ error: 'Email is required for OTP validation.' });
 
         const cacheKey = `otp:email:${lookupEmail}`;
         const cachedOtp = await redisClient.get(cacheKey);
 
-        if (!cachedOtp) {
-            return res.status(400).json({ error: "Your verification code has expired or was never requested. Click resend." });
-        }
-
-        if (cachedOtp !== String(otp).trim()) {
-            return res.status(400).json({ error: "Incorrect OTP entered. Please check your inbox and try again." });
-        }
+        if (!cachedOtp) return res.status(400).json({ error: "Your verification code has expired or was never requested." });
+        if (cachedOtp !== String(otp).trim()) return res.status(400).json({ error: "Incorrect OTP entered." });
 
         await redisClient.del(cacheKey);
 
-        if (!user) {
-            user = await User.findOne({ email: lookupEmail });
-        }
+        if (!user) user = await User.findOne({ email: lookupEmail });
 
         if (!user) {
             if (adminLogin || mode === 'login') {
                 return res.status(404).json({ error: 'Account does not exist. Please register first.' });
             }
 
-            const registrationToken = jwt.sign(
-                { email: lookupEmail },
-                process.env.JWT_SECRET,
-                { expiresIn: '15m' }
-            );
+            if (mode === 'register') {
+                // 1. Retrieve the password from the first step
+                const rawPassword = await redisClient.get(`pending:pwd:${lookupEmail}`);
+                if (!rawPassword) {
+                    return res.status(400).json({ error: "Registration session expired. Please start over." });
+                }
 
-            return res.status(200).json({
-                success: true,
-                registrationRequired: true,
-                message: "Email verified successfully! Please complete your registration profile details.",
-                registrationToken
-            });
+                // 2. Hash password
+                const hashedPassword = await bcrypt.hash(rawPassword, 10);
+                await redisClient.del(`pending:pwd:${lookupEmail}`);
+
+                // 3. Generate required fields (ID & Unique Placeholder Phone)
+                const generatedId = `USR-${Date.now().toString().slice(-4)}${Math.floor(1000 + Math.random() * 9000)}`;
+                
+                let uniquePlaceholderPhone;
+                do {
+                    uniquePlaceholderPhone = `+9100${Math.floor(10000000 + Math.random() * 90000000)}`;
+                } while (await User.exists({ phone: uniquePlaceholderPhone }));
+
+                // 4. Create the "Lazy" account
+                user = new User({
+                    id: generatedId,
+                    email: lookupEmail,
+                    phone: uniquePlaceholderPhone,
+                    password: hashedPassword,
+                    firstName: `User${Date.now().toString().slice(-4)}`,
+                    lastName: "Guest",
+                    isProfileComplete: false
+                });
+                await user.save();
+
+                // 5. Issue token bound strictly to this new user's Object ID
+                const registrationToken = jwt.sign(
+                    { userId: user._id },
+                    process.env.JWT_SECRET,
+                    { expiresIn: '15m' }
+                );
+
+                return res.status(200).json({
+                    success: true,
+                    registrationRequired: true,
+                    message: "Email verified successfully! Please complete your registration profile details.",
+                    registrationToken
+                });
+            }
         }
 
-        if (adminLogin && user.role !== 'Admin') {
-            return res.status(403).json({ error: 'Invalid admin user' });
-        }
+        if (adminLogin && user.role !== 'Admin') return res.status(403).json({ error: 'Invalid admin user' });
 
         return await processUserSession(user, req, res, "Welcome back! Login successful.");
 
     } catch (error) {
         console.error("Email Verification Endpoint Error:", error);
         return res.status(500).json({ error: error.message || "Internal profile session integration crash" });
+    }
+};
+
+export const completeRegistration = async (req, res) => {
+    try {
+        const { firstName, lastName, phone, registrationToken } = req.body;
+
+        if (!firstName || !registrationToken) {
+            return res.status(400).json({ error: "First name and registration token are required." });
+        }
+
+        let decoded;
+        try {
+            decoded = jwt.verify(registrationToken, process.env.JWT_SECRET);
+        } catch (err) {
+            return res.status(400).json({ error: "Registration session expired. Please verify your email again." });
+        }
+
+        const userId = decoded.userId;
+        const normalizedPhone = phone ? String(phone).trim() : '';
+        const normalizedFirstName = String(firstName).trim();
+        const normalizedLastName = lastName ? String(lastName).trim() : 'Guest';
+
+        let updateData = {
+            firstName: normalizedFirstName,
+            lastName: normalizedLastName,
+            isProfileComplete: true
+        };
+
+        // Only update the phone if the user actually provided one in this step
+        if (normalizedPhone) {
+            // Check if phone belongs to a DIFFERENT user
+            const phoneExists = await User.exists({ phone: normalizedPhone, _id: { $ne: userId } });
+            if (phoneExists) {
+                return res.status(400).json({ error: "This phone number is already associated with another account." });
+            }
+            updateData.phone = normalizedPhone;
+        }
+
+        // Update the existing "Lazy" record
+        const updatedUser = await User.findByIdAndUpdate(
+            userId,
+            updateData,
+            { new: true } // Return the updated document
+        );
+
+        if (!updatedUser) {
+            return res.status(404).json({ error: "User account could not be found to complete setup." });
+        }
+
+        return await processUserSession(updatedUser, req, res, "Account successfully provisioned! Welcome to the platform.");
+
+    } catch (error) {
+        console.error("Complete Registration Error:", error);
+        return res.status(500).json({ error: "Internal profile configuration creation failure." });
     }
 };
 
@@ -700,85 +819,20 @@ export const resetPassword = async (req, res) => {
     }
 };
 
-export const completeRegistration = async (req, res) => {
-    try {
-        const { firstName, lastName, phone, password, registrationToken } = req.body;
-
-        if (!firstName || !password || !registrationToken) {
-            return res.status(400).json({ error: "First name, password, and registration token are required." });
-        }
-
-        let decoded;
-        try {
-            decoded = jwt.verify(registrationToken, process.env.JWT_SECRET);
-        } catch (err) {
-            return res.status(400).json({ error: "Registration session expired. Please verify your email again." });
-        }
-
-        const verifiedEmail = decoded.email;
-        const normalizedPhone = phone ? String(phone).trim() : '';
-        const normalizedFirstName = String(firstName).trim() || `User${Date.now().toString().slice(-4)}`;
-        const normalizedLastName = lastName ? String(lastName).trim() : 'Guest';
-
-        let existingUser = await User.findOne({ email: verifiedEmail });
-        if (existingUser) {
-            return res.status(400).json({ error: "An account with this email address already exists." });
-        }
-
-        let finalPhone = normalizedPhone;
-        if (finalPhone) {
-            const phoneExists = await User.exists({ phone: finalPhone });
-            if (phoneExists) {
-                return res.status(400).json({ error: "This phone number is already associated with another account." });
-            }
-        } else {
-            let uniquePhone;
-            do {
-                uniquePhone = `+91${Math.floor(1000000000 + Math.random() * 9000000000)}`;
-            } while (await User.exists({ phone: uniquePhone }));
-            finalPhone = uniquePhone;
-        }
-
-        const generatedId = `USR-${Date.now().toString().slice(-4)}${Math.floor(1000 + Math.random() * 9000)}`;
-
-        const newUser = new User({
-            id: generatedId,
-            firstName: normalizedFirstName,
-            lastName: normalizedLastName,
-            email: verifiedEmail,
-            phone: finalPhone,
-            password: password.trim()
-        });
-
-        await newUser.save();
-
-        return await processUserSession(newUser, req, res, "Account successfully provisioned! Welcome to Urban.");
-
-    } catch (error) {
-        console.error("Complete Registration Error:", error);
-        return res.status(500).json({ error: "Internal profile configuration creation failure." });
-    }
-};
-
 
 export const updateUser = async (req, res) => {
     try {
         const { id } = req.user;
-        // 1. Extract phone from req.body
         const { firstName, lastName, phone } = req.body; 
 
         const user = await User.findOne({ id });
         if (!user) return res.status(404).json({ error: "User not found" });
 
-        // Update name fields
         if (firstName !== undefined) user.firstName = String(firstName).trim();
         if (lastName !== undefined) user.lastName = String(lastName).trim();
         
-        // 2. Add phone saving logic with uniqueness check
         if (phone !== undefined && String(phone).trim() !== '') {
             const newPhone = String(phone).trim();
-            
-            // Only check if the phone is actually changing
             if (newPhone !== user.phone) {
                 const phoneExists = await User.findOne({ phone: newPhone, id: { $ne: id } });
                 if (phoneExists) {
@@ -790,23 +844,108 @@ export const updateUser = async (req, res) => {
 
         await user.save();
         
+        // Sync cache & session using the helper
+        await syncUserCacheAndSession(user, req);
+
         const userData = user.toObject();
-        // Crucial: remove password from object before sending to client/Redis
         delete userData.password; 
-        const jsonUser = JSON.stringify(userData);
-
-        // Invalidate/Update Redis cache
-        await Promise.all([
-            redisClient.setEx(`user:id:${user.id}`, 3600, jsonUser),
-            redisClient.setEx(`user:email:${user.email || ''}`, 3600, jsonUser),
-            redisClient.setEx(`user:phone:${user.phone || ''}`, 3600, jsonUser),
-            redisClient.setEx(`session:${req.cookies.token}`, 3600, jsonUser)
-        ]);
-
         return res.status(200).json({ success: "User profile updated successfully", user: userData });
     } catch (error) {
         console.error("Update User Error:", error);
         return res.status(500).json({ error: error.message || "Internal Server Error" });
+    }
+};
+
+export const addAddress = async (req, res) => {
+    try {
+        const { userId, ...addressData } = req.body;
+        if (!userId) return res.status(401).json({ error: "Please login again to continue" });
+
+        const user = await User.findOne({ id: userId });
+        if (!user) return res.status(404).json({ error: "User not found" });
+        if (user.addresses.length >= 5) return res.status(400).json({ error: "Can't add more than 5 addresses" });
+
+        if (user.addresses.length === 0) {
+            addressData.isDefault = true;
+        } else if (addressData.isDefault === true) {
+            await User.updateOne({ id: userId }, { $set: { "addresses.$[].isDefault": false } });
+            const refreshedUser = await User.findOne({ id: userId });
+            if (refreshedUser) user.addresses = refreshedUser.addresses;
+        }
+
+        const _id = new mongoose.Types.ObjectId();
+        const newAddress = { ...addressData, _id, country: addressData.country || 'India' };
+        user.addresses.push(newAddress);
+        await user.save();
+
+        // Sync cache & session using the helper
+        await syncUserCacheAndSession(user, req);
+
+        return res.status(201).json({ success: true, message: "Address added successfully", newAddress });
+    } catch (error) {
+        if (error.name === 'ValidationError') return res.status(400).json({ error: "Validation Failed", details: error.message });
+        return res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+
+export const updateAddress = async (req, res) => {
+    try {
+        const { _id, userId, ...updatedAddressData } = req.body;
+        if (!userId) return res.status(401).json({ error: "Please login again" });
+
+        const currentUser = await User.findOne({ id: userId });
+        if (!currentUser) return res.status(404).json({ error: "User not found" });
+
+        const targetAddress = currentUser.addresses.id(_id);
+        if (!targetAddress) return res.status(404).json({ error: "Address not found" });
+
+        if (updatedAddressData.isDefault === false && targetAddress.isDefault === true) {
+            const otherDefaults = currentUser.addresses.filter(addr => addr._id.toString() !== _id && addr.isDefault === true);
+            if (otherDefaults.length === 0) return res.status(400).json({ error: "At least one address must be set as default." });
+        }
+
+        if (updatedAddressData.isDefault === true) {
+            await User.updateOne({ id: userId }, { $set: { "addresses.$[].isDefault": false } });
+        }
+
+        const updateFields = {};
+        for (const key in updatedAddressData) {
+            updateFields[`addresses.$.${key}`] = updatedAddressData[key];
+        }
+
+        const user = await User.findOneAndUpdate({ id: userId, "addresses._id": _id }, { $set: updateFields }, { new: true, runValidators: true });
+        
+        // Sync cache & session using the helper
+        await syncUserCacheAndSession(user, req);
+
+        return res.status(200).json({ success: "Address updated successfully", updatedAddress: user.addresses.id(_id) });
+    } catch (error) {
+        return res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+
+export const deleteAddress = async (req, res) => {
+    try {
+        const { id, addressId } = req.params;
+        if (!id || !addressId) return res.status(400).json({ error: "Missing identification" });
+
+        const user = await User.findOne({ id });
+        if (!user) return res.status(404).json({ error: "User not found" });
+
+        const addressToDelete = user.addresses.id(addressId);
+        if (!addressToDelete) return res.status(404).json({ error: "Address not found" });
+
+        if (addressToDelete.isDefault) return res.status(400).json({ error: "You cannot delete your primary address." });
+
+        user.addresses.pull(addressId);
+        await user.save();
+
+        // Sync cache & session using the helper
+        await syncUserCacheAndSession(user, req);
+
+        return res.status(200).json({ success: "Address deleted successfully", deletedAddress: addressId });
+    } catch (error) {
+        return res.status(500).json({ error: "Internal Server Error" });
     }
 };
 
@@ -907,97 +1046,7 @@ export const deleteUserAdmin = async (req, res) => {
     }
 };
 
-export const addAddress = async (req, res) => {
-    try {
-        const { userId, ...addressData } = req.body;
-        if (!userId) return res.status(401).json({ error: "Please login again to continue" });
 
-        const user = await User.findOne({ id: userId });
-        if (!user) return res.status(404).json({ error: "User not found" });
-        if (user.addresses.length >= 5) return res.status(400).json({ error: "Can't add more than 5 addresses" });
-
-        if (user.addresses.length === 0) {
-            addressData.isDefault = true;
-        } else if (addressData.isDefault === true) {
-            await User.updateOne({ id: userId }, { $set: { "addresses.$[].isDefault": false } });
-            const refreshedUser = await User.findOne({ id: userId });
-            if (refreshedUser) user.addresses = refreshedUser.addresses;
-        }
-
-        const _id = new mongoose.Types.ObjectId();
-        const newAddress = { ...addressData, _id, country: addressData.country || 'India' };
-        user.addresses.push(newAddress);
-        await user.save();
-
-        const keysToInvalidate = [`user:id:${userId}`, `user:email:${user.email || ''}`, `user:phone:${user.phone || ''}`];
-        await redisClient.del(...keysToInvalidate.filter(Boolean)).catch(() => { });
-
-        return res.status(201).json({ success: true, message: "Address added successfully", newAddress });
-    } catch (error) {
-        if (error.name === 'ValidationError') return res.status(400).json({ error: "Validation Failed", details: error.message });
-        return res.status(500).json({ error: "Internal Server Error" });
-    }
-};
-
-export const updateAddress = async (req, res) => {
-    try {
-        const { _id, userId, ...updatedAddressData } = req.body;
-        if (!userId) return res.status(401).json({ error: "Please login again" });
-
-        const currentUser = await User.findOne({ id: userId });
-        if (!currentUser) return res.status(404).json({ error: "User not found" });
-
-        const targetAddress = currentUser.addresses.id(_id);
-        if (!targetAddress) return res.status(404).json({ error: "Address not found" });
-
-        if (updatedAddressData.isDefault === false && targetAddress.isDefault === true) {
-            const otherDefaults = currentUser.addresses.filter(addr => addr._id.toString() !== _id && addr.isDefault === true);
-            if (otherDefaults.length === 0) return res.status(400).json({ error: "At least one address must be set as default." });
-        }
-
-        if (updatedAddressData.isDefault === true) {
-            await User.updateOne({ id: userId }, { $set: { "addresses.$[].isDefault": false } });
-        }
-
-        const updateFields = {};
-        for (const key in updatedAddressData) {
-            updateFields[`addresses.$.${key}`] = updatedAddressData[key];
-        }
-
-        const user = await User.findOneAndUpdate({ id: userId, "addresses._id": _id }, { $set: updateFields }, { new: true, runValidators: true });
-        const keysToInvalidate = [`user:id:${userId}`, `user:email:${user.email || ''}`, `user:phone:${user.phone || ''}`];
-        await redisClient.del(...keysToInvalidate.filter(Boolean)).catch(() => { });
-
-        return res.status(200).json({ success: "Address updated successfully", updatedAddress: user.addresses.id(_id) });
-    } catch (error) {
-        return res.status(500).json({ error: "Internal Server Error" });
-    }
-};
-
-export const deleteAddress = async (req, res) => {
-    try {
-        const { id, addressId } = req.params;
-        if (!id || !addressId) return res.status(400).json({ error: "Missing identification" });
-
-        const user = await User.findOne({ id });
-        if (!user) return res.status(404).json({ error: "User not found" });
-
-        const addressToDelete = user.addresses.id(addressId);
-        if (!addressToDelete) return res.status(404).json({ error: "Address not found" });
-
-        if (addressToDelete.isDefault) return res.status(400).json({ error: "You cannot delete your primary address." });
-
-        user.addresses.pull(addressId);
-        await user.save();
-
-        const keysToInvalidate = [`user:id:${id}`, `user:email:${user.email || ''}`, `user:phone:${user.phone || ''}`];
-        await redisClient.del(...keysToInvalidate.filter(Boolean)).catch(() => { });
-
-        return res.status(200).json({ success: "Address deleted successfully", deletedAddress: addressId });
-    } catch (error) {
-        return res.status(500).json({ error: "Internal Server Error" });
-    }
-};
 
 export const getAddresses = async (req, res) => {
     try {

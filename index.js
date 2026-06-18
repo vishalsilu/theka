@@ -30,16 +30,15 @@ app.use(cookieParser());
 const port = process.env.PORT || 5000;
 const otpCache = new Map();
 
-// Middlewares
 const defaultOrigins = [
-  'http://localhost:5175', // Typically your Storefront
-  'http://localhost:5174', // Typically your Storefront
+  'http://localhost:5175', 
+  'http://localhost:5174', 
   'http://localhost:3001',
   'http://172.20.10.13:5173',
   'http://172.28.56.116:5173',
   'http://172.20.10.13:5174',
   'http://172.28.56.116:5174',
-  // Typically your Admin Dashboard
+  
   'https://urbanroyalty.netlify.app',
   'https://adminurbanroyalty.netlify.app',
 ].filter(Boolean);
@@ -57,14 +56,14 @@ const allowedOriginPatterns = [
   /(^https:\/\/[^/]+\.render\.com$)/i,
 ];
 
-// When deployed behind a proxy (Render), trust the proxy so HTTPS detection works correctly.
+
 app.set('trust proxy', 1);
 
 app.use(cors({
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
     
-    // Check if it's one of your allowed origins or a pattern
+    
     const allowed = allowedOrigins.includes(origin) || 
                     allowedOriginPatterns.some((pattern) => pattern.test(origin));
 
@@ -75,37 +74,37 @@ app.use(cors({
     }
   },
   credentials: true,
-  // Add 'Set-Cookie' to allowed headers just in case, 
-  // though usually not required for requests, it helps with transparency.
+  
+  
   allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-id', 'x-cart-token', 'Cookie'], 
   exposedHeaders: ['Set-Cookie']
 }));
 
 
-// app.use(cors({
-//   origin: function (origin, callback) {
-//     if (!origin) {
-//       return callback(null, true);
-//     }
 
-//     const allowed = allowedOrigins.includes(origin)
-//       || allowedOriginPatterns.some((pattern) => pattern.test(origin));
 
-//     if (allowed) {
-//       return callback(null, true);
-//     }
 
-//     callback(new Error(`CORS Policy Blocked This Request: ${origin}`));
-//   },
-//   credentials: true, // REQUIRED for cookies
-//   // Ensure these headers match exactly what you are sending
-//   allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-id', 'x-cart-token'],
-//   exposedHeaders: ['Set-Cookie']
-// }));
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 app.use(express.json());
-// Parse cookies for cookie-based auth
 
-// Routes
+
+
 app.use('/api/users', userRoutes);
 app.use('/api/cart',cartRoutes)
 app.use('/api/product',productRoutes)
@@ -136,10 +135,10 @@ app.use('/admin/api/users', adminUserRoutes)
 app.use('/api/attributes', attributeRoutes)
 app.use('/admin/api/attributes', attributeRoutes)
 
-// Root Route for testing
+
 app.get('/', (req, res) => res.send('Urban API is running...'));
 
-// Multer error handler for file upload failures
+
 app.use((err, req, res, next) => {
     if (err && err.name === 'MulterError') {
         return res.status(400).json({ error: err.message });
@@ -150,20 +149,16 @@ app.use((err, req, res, next) => {
     next();
 });
 
-// Unified Startup Function
+
 const startServer = async () => {
     try {
-        // 1. Connect to MongoDB
         await connectDB();
         
 await connectRedis();
-        // 3. Start background tasks
         startCartSyncCron();
         startNamePropagation();
 
-        // 4. Start Listening
         app.listen(port, '0.0.0.0', () => {
-            // connectToWhatsApp();
             console.log(`🚀 Server spinning on http://localhost:${port}`);
         });
     } catch (error) {

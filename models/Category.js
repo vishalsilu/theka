@@ -13,7 +13,7 @@ const categorySchema = new mongoose.Schema({
     },
     wearType: { 
         type: String, 
-        enum: ['TopWear', 'FootWear', 'Accessories' , 'BottomWear', 'Outerwear', 'Underwear', 'Activewear', 'Sleepwear', 'Swimwear'], 
+        enum: ['TopWear', 'FootWear', 'Accessories' , 'BottomWear', 'Outerwear', 'Underwear', 'Activewear', 'Sleepwear', 'Swimwear',"FreeSize"], 
         required: true 
     },
     image: { 

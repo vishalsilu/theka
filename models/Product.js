@@ -27,6 +27,12 @@ const productSchema = new mongoose.Schema({
     name: { type: String, required: true, trim: true },
     description: { type: String, required: true },
     price: { type: Number, required: true },
+
+    status: { 
+        type: String, 
+        enum: ['ACTIVE', 'DRAFT'], 
+        default: 'ACTIVE' 
+    },
     
     // --- Marketing & Sorting ---
     isFeatured: { type: Boolean, default: false },
@@ -131,6 +137,7 @@ productSchema.virtual('inStock').get(function() {
 // --- Indexes ---
 productSchema.index({ "collectionInfo.name": 1 }); 
 productSchema.index({ fit: 1 }); // Indexing fit for faster filtering
+productSchema.index({ status: 1 });
 productSchema.index({ salesCount: -1 });
 productSchema.index({ isSponsored: -1, sponsorPriority: -1 });
 
