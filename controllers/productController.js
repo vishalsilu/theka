@@ -180,6 +180,66 @@ const combineVariantImages = (variant = {}, existingVariant = {}, index, byToken
     return [...sourceImages, ...fallbackNewImages.filter((url) => !sourceImages.includes(url))];
 };
 
+// Extracted formatting helper for re-use
+const formatProductsHelper = (productsRaw) => {
+    return productsRaw.map(product => {
+        const originalPrice = product.price || 0;
+        const discValue = product.discount?.value || 0;
+        const discType = product.discount?.type || 'none';
+
+        let salePrice = originalPrice;
+        let discountDisplay = null;
+
+        if (discType === 'percentage' && discValue > 0) {
+            salePrice = originalPrice - (originalPrice * (discValue / 100));
+            discountDisplay = `-${discValue}%`;
+        } else if (discType === 'amount' && discValue > 0) {
+            salePrice = Math.max(0, originalPrice - discValue);
+            discountDisplay = `-₹${discValue.toLocaleString('en-IN')}`;
+        }
+
+        const variantsArray = product.variants || [];
+        const defaultVariant = variantsArray.find(v => v.isDefault) || variantsArray[0];
+
+        const stockLevelCount = variantsArray.reduce((total, variant) => {
+            const sizeStockSum = (variant?.sizes || []).reduce((sum, s) => sum + (s.stock || 0), 0);
+            return total + sizeStockSum;
+        }, 0);
+
+        return {
+            id: product.id || product._id, 
+            name: product.name,
+            price: originalPrice,
+            type: product.type || "Standard", 
+            salePrice: Math.round(salePrice), 
+            discountDisplay,
+            fabric: product.fabric,
+            pattern: product.pattern,
+            fit: product.fit,
+            color: variantsArray.map(v => v?.color).filter(Boolean),
+            size: [...new Set(variantsArray.flatMap(v => (v?.sizes || []).map(s => s.size)))],
+            inStock: variantsArray.some(v => (v?.sizes || []).some(s => s.stock > 0)),
+            thumbnail: defaultVariant?.images?.[0] || null,
+            level: stockLevelCount > 20 ? "high" : stockLevelCount > 0 ? "low" : "out",
+            salesCount: product.salesCount || 0,
+            isTrending: product.isTrending || false,
+            createdAt: product.createdAt,
+            description: product.description || null,
+            category: product.categoryInfo?.name || null,
+            collection: product.collectionInfo?.name || null,
+            variants : variantsArray,
+            isFeatured: product.isFeatured || false,
+            discount: product.discount || null,
+            sizeType: product.sizeType ,
+            deal : product.deal || null,
+            sponsorPriority: product.sponsorPriority || null,
+            sponsorUntil: product.sponsorUntil || null,
+            isSponsored: product.isSponsored || false,
+            status: product.status
+        };
+    });
+};
+
 
 // ============================================================================
 // --- MAIN CONTROLLER ACTIONS ---
@@ -1069,85 +1129,22 @@ export const getFeaturedProducts = async (req, res) => {
 };
 
 // --- GET ALL PRODUCTS ---
-// --- GET ALL PRODUCTS (ADMIN DASHBOARD) ---
-// --- GET ALL PRODUCTS (SMART UNIFIED ENDPOINT) ---
 export const getAllProducts = async (req, res) => {
     try {
         setNoStoreHeaders(res);
 
-        // 1. Detect who is asking
-        // Checks if the frontend sent '?admin=true' OR if your adminCheck middleware populated req.user
-
-        // 2. Assign the correct cache key
-        const cacheKey =  "products:admin:all";
+        const cacheKey = "products:admin:all";
         const cached = await redisClient.get(cacheKey);
         
         if (cached) return res.status(200).json(JSON.parse(cached));
-
-        // 3. Assign the correct database query
-        // Admins get everything ({}). Public users get only published items ({ status: 'ACTIVE' })
 
         const productsRaw = await Product.find({})
             .select("name id price discount fabric pattern fit salesCount isTrending createdAt variants type description categoryInfo collectionInfo isFeatured sizeType isSponsored sponsorPriority deal sponsorUntil status" ) 
             .sort({ createdAt: -1 })
             .lean();
 
-        const products = productsRaw.map(product => {
-            const originalPrice = product.price || 0;
-            const discValue = product.discount?.value || 0;
-            const discType = product.discount?.type || 'none';
-
-            let salePrice = originalPrice;
-            let discountDisplay = null;
-
-            if (discType === 'percentage' && discValue > 0) {
-                salePrice = originalPrice - (originalPrice * (discValue / 100));
-                discountDisplay = `-${discValue}%`;
-            } else if (discType === 'amount' && discValue > 0) {
-                salePrice = Math.max(0, originalPrice - discValue);
-                discountDisplay = `-₹${discValue.toLocaleString('en-IN')}`;
-            }
-
-            const variantsArray = product.variants || [];
-            const defaultVariant = variantsArray.find(v => v.isDefault) || variantsArray[0];
-
-            const stockLevelCount = variantsArray.reduce((total, variant) => {
-                const sizeStockSum = (variant?.sizes || []).reduce((sum, s) => sum + (s.stock || 0), 0);
-                return total + sizeStockSum;
-            }, 0);
-
-            return {
-                id: product.id || product._id, 
-                name: product.name,
-                price: originalPrice,
-                type: product.type || "Standard", 
-                salePrice: Math.round(salePrice), 
-                discountDisplay,
-                fabric: product.fabric,
-                pattern: product.pattern,
-                fit: product.fit,
-                color: variantsArray.map(v => v?.color).filter(Boolean),
-                size: [...new Set(variantsArray.flatMap(v => (v?.sizes || []).map(s => s.size)))],
-                inStock: variantsArray.some(v => (v?.sizes || []).some(s => s.stock > 0)),
-                thumbnail: defaultVariant?.images?.[0] || null,
-                level: stockLevelCount > 20 ? "high" : stockLevelCount > 0 ? "low" : "out",
-                salesCount: product.salesCount || 0,
-                isTrending: product.isTrending || false,
-                createdAt: product.createdAt,
-                description: product.description || null,
-                category: product.categoryInfo?.name || null,
-                collection: product.collectionInfo?.name || null,
-                variants : variantsArray,
-                isFeatured: product.isFeatured || false,
-                discount: product.discount || null,
-                sizeType: product.sizeType ,
-                deal : product.deal || null,
-                sponsorPriority: product.sponsorPriority || null,
-                sponsorUntil: product.sponsorUntil || null,
-                isSponsored: product.isSponsored || false,
-                status: product.status
-            };
-        });
+        // 🟢 USING THE EXTRACTED HELPER FUNCTION
+        const products = formatProductsHelper(productsRaw);
 
         await redisClient.setEx(cacheKey, 3600, JSON.stringify(products));
         return res.status(200).json(products);
@@ -1158,7 +1155,6 @@ export const getAllProducts = async (req, res) => {
     }
 };
 
-// --- TOGGLE PRODUCT STATUS ---
 // --- TOGGLE PRODUCT STATUS ---
 export const toggleProductStatus = async (req, res) => {
     try {
@@ -1171,12 +1167,21 @@ export const toggleProductStatus = async (req, res) => {
 
         if (!product) return res.status(404).json({ message: "Product not found" });
 
+        // 1. Update the status
         product.status = product.status === 'ACTIVE' ? 'DRAFT' : 'ACTIVE';
         await product.save();
 
-        // FIX: Explicitly target the "products:admin:all" cache key for deletion
-        await safeRedisDel(`product:detail:${id}`, `product:detail:${product._id}`);
-        await safeRedisDel("products:featured", "products:all", "products:admin:all");
+        // 2. Fetch the newly updated list from DB to ensure sync
+        const updatedProductsRaw = await Product.find({})
+            .select("name id price discount fabric pattern fit salesCount isTrending createdAt variants type description categoryInfo collectionInfo isFeatured sizeType isSponsored sponsorPriority deal sponsorUntil status")
+            .sort({ createdAt: -1 })
+            .lean();
+
+        // 3. Format using the helper
+        const formattedProducts = formatProductsHelper(updatedProductsRaw);
+
+        // 4. Actively set the cache with the fresh formatted data
+        await redisClient.setEx("products:admin:all", 3600, JSON.stringify(formattedProducts));
         
         await invalidateProductCache({
             categoryId: normalizeCacheId(product.categoryInfo?.id || product.categoryInfo?._id),
