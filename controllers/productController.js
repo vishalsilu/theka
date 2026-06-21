@@ -40,10 +40,14 @@ const parseDateValue = (value) => {
     return date;
 };
 
+// 🟢 FIX: Prevent CROSSSLOT errors by deleting keys concurrently, but individually
 const safeRedisDel = async (...keys) => {
     const flattened = keys.flat(Infinity).filter(Boolean).map(String);
     if (!flattened.length) return;
-    return await redisClient.del(...flattened);
+    
+    await Promise.all(flattened.map(key => redisClient.del(key).catch(err => {
+        console.warn(`Failed to delete cache key: ${key}`, err);
+    })));
 };
 
 const setNoStoreHeaders = (res) => {
@@ -53,7 +57,8 @@ const setNoStoreHeaders = (res) => {
 };
 
 const buildProductCacheKeys = ({ collectionId, categoryId, collectionName, categoryName } = {}) => {
-    const keys = ["products:all", "products:featured"];
+    // 🟢 FIX: Added 'products:admin:all' to the global invalidation list
+    const keys = ["products:all", "products:featured", "products:admin:all"];
     const normalizedCollectionId = normalizeCacheId(collectionId);
     const normalizedCategoryId = normalizeCacheId(categoryId);
     const normalizedCollectionName = normalizeCacheName(collectionName);
@@ -80,7 +85,8 @@ const invalidateProductCache = async (...args) => {
         payloads.push(...args.filter((arg) => typeof arg === 'object' && !Array.isArray(arg)));
     }
 
-    const keys = new Set(["products:all", "products:featured"]);
+    // 🟢 FIX: Added 'products:admin:all' to the baseline set
+    const keys = new Set(["products:all", "products:featured", "products:admin:all"]);
 
     payloads.forEach((payload) => {
         buildProductCacheKeys(payload).forEach((key) => {
@@ -180,7 +186,6 @@ const combineVariantImages = (variant = {}, existingVariant = {}, index, byToken
     return [...sourceImages, ...fallbackNewImages.filter((url) => !sourceImages.includes(url))];
 };
 
-// Extracted formatting helper for re-use
 const formatProductsHelper = (productsRaw) => {
     return productsRaw.map(product => {
         const originalPrice = product.price || 0;
@@ -271,7 +276,6 @@ export const createProduct = async (req, res) => {
         if (typeof productData.taxable === 'string') productData.taxable = parseBooleanValue(productData.taxable);
         if (typeof productData.isSponsored === 'string') productData.isSponsored = parseBooleanValue(productData.isSponsored);
         
-        // BUG FIX: Parse Dates Safely using helper to handle "null" string
         if (typeof productData.sponsorUntil !== 'undefined') {
             productData.sponsorUntil = parseDateValue(productData.sponsorUntil);
         }
@@ -345,7 +349,9 @@ export const createProduct = async (req, res) => {
         const newProduct = new Product(productData);
         await newProduct.save();
 
-        await safeRedisDel("products:featured", "products:all");
+        // 🟢 FIX: Added products:admin:all explicitly
+        await safeRedisDel("products:featured", "products:all", "products:admin:all");
+        
         if (typeof invalidateProductCache === 'function') {
             const payload = {
                 categoryId: normalizeCacheId(newProduct.categoryInfo?.id || newProduct.categoryInfo?._id),
@@ -484,11 +490,19 @@ export const getProductsByCollection = async (req, res) => {
 };
 
 // --- GET PRODUCTS BY CATEGORY (LEAN FETCH) ---
+// --- GET PRODUCTS BY CATEGORY (LEAN FETCH) ---
 export const getProductsByCategory = async (req, res) => {
     try {
+        // 🟢 FIX 1: Prevent Browser/CDN/Next.js from trapping stale responses
+        if (typeof setNoStoreHeaders === 'function') {
+            setNoStoreHeaders(res);
+        }
+
         const { type, category } = req.params;
-        const rawType = type?.replace("-"," ");
-        const rawCategory = category?.replace("-"," ");
+        
+        // 🟢 FIX 2 & 3: Use replaceAll for multi-word categories and trim() to match invalidator keys
+        const rawType = type?.replaceAll("-", " ").trim();
+        const rawCategory = category?.replaceAll("-", " ").trim();
 
         const cacheKey = `products:${rawType.toLowerCase()}:${rawCategory.toLowerCase()}:lite`;
 
@@ -961,7 +975,6 @@ export const updateProduct = async (req, res) => {
             updateData.sponsorPriority = updateData.sponsorPriority === '' || updateData.sponsorPriority === 'null' ? 0 : Number(updateData.sponsorPriority) || 0;
         }
         
-        // BUG FIX: Parse Dates Safely
         if (typeof updateData.sponsorUntil !== 'undefined') {
             updateData.sponsorUntil = parseDateValue(updateData.sponsorUntil);
         }
@@ -1001,7 +1014,7 @@ export const updateProduct = async (req, res) => {
         );
 
         await safeRedisDel(`product:detail:${id}`, `product:detail:${updatedProduct?._id || ''}`, `product:detail:${updatedProduct?.id || ''}`);
-        await safeRedisDel("products:featured", "products:all");
+        await safeRedisDel("products:featured", "products:admin:all", "products:all");
 
         try {
             const oldImages = Array.isArray(product?.variants) ? product.variants.flatMap(v => (v.images || [])) : [];
@@ -1028,6 +1041,18 @@ export const updateProduct = async (req, res) => {
 
         await invalidateProductCache(oldCachePayload, newCachePayload);
 
+        // 🟢 FIX: ACTIVE SYNC to prevent race conditions during updates
+        try {
+            const freshProductsRaw = await Product.find({})
+                .select("name id price discount fabric pattern fit salesCount isTrending createdAt variants type description categoryInfo collectionInfo isFeatured sizeType isSponsored sponsorPriority deal sponsorUntil status")
+                .sort({ createdAt: -1 })
+                .lean();
+            const formattedProducts = formatProductsHelper(freshProductsRaw);
+            await redisClient.setEx("products:admin:all", 3600, JSON.stringify(formattedProducts));
+        } catch (cacheErr) {
+            console.error("Failed to actively rebuild admin cache:", cacheErr);
+        }
+
         res.status(200).json({ success: true, data: updatedProduct });
       
     } catch (error) {
@@ -1051,7 +1076,9 @@ export const deleteProduct = async (req, res) => {
         } catch (err) {}
 
         await safeRedisDel(`product:detail:${id}`);
-        await safeRedisDel("products:featured", "products:all");
+        // 🟢 FIX: Added products:admin:all to delete sweep
+        await safeRedisDel("products:featured", "products:all", "products:admin:all");
+        
         const delPayload = {
             categoryId: normalizeCacheId(deletedProduct.categoryInfo?.id || deletedProduct.categoryInfo?._id),
             collectionId: normalizeCacheId(deletedProduct.collectionInfo?.id || deletedProduct.collectionInfo?._id),
@@ -1143,7 +1170,6 @@ export const getAllProducts = async (req, res) => {
             .sort({ createdAt: -1 })
             .lean();
 
-        // 🟢 USING THE EXTRACTED HELPER FUNCTION
         const products = formatProductsHelper(productsRaw);
 
         await redisClient.setEx(cacheKey, 3600, JSON.stringify(products));
@@ -1167,20 +1193,16 @@ export const toggleProductStatus = async (req, res) => {
 
         if (!product) return res.status(404).json({ message: "Product not found" });
 
-        // 1. Update the status
         product.status = product.status === 'ACTIVE' ? 'DRAFT' : 'ACTIVE';
         await product.save();
 
-        // 2. Fetch the newly updated list from DB to ensure sync
         const updatedProductsRaw = await Product.find({})
             .select("name id price discount fabric pattern fit salesCount isTrending createdAt variants type description categoryInfo collectionInfo isFeatured sizeType isSponsored sponsorPriority deal sponsorUntil status")
             .sort({ createdAt: -1 })
             .lean();
 
-        // 3. Format using the helper
         const formattedProducts = formatProductsHelper(updatedProductsRaw);
 
-        // 4. Actively set the cache with the fresh formatted data
         await redisClient.setEx("products:admin:all", 3600, JSON.stringify(formattedProducts));
         
         await invalidateProductCache({

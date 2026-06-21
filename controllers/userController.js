@@ -12,6 +12,12 @@ import { sendEmail } from '../config/email.js';
 import { validateRecaptcha } from "../middleware/verifyRecaptcha.js";
 import SiteData from '../models/SiteData.js';
 import bcrypt from "bcryptjs";
+import { 
+    sanitizeThinCart, 
+    mergeThinCarts, 
+    getUserCartItems, 
+    saveUserCart 
+} from '../controllers/cartController.js'; // Perfect imports!
 
 const generateToken = (id) => {
     return jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -38,12 +44,6 @@ const buildCookieOptions = (req) => {
         path: '/',
         maxAge: SESSION_TTL * 1000,
     };
-
-    // const cookieDomain = String(process.env.COOKIE_DOMAIN || '').trim();
-    // if (cookieDomain) {
-    //     cookieOptions.domain = cookieDomain;
-    // }
-
     return cookieOptions;
 };
 
@@ -54,51 +54,17 @@ const computeSessionFingerprint = (req) => {
     return crypto.createHash('sha256').update(`${userAgent}|${acceptLanguage}|${origin}`).digest('hex');
 };
 
-function normalizeCartItem(raw) {
-    if (!raw || typeof raw !== 'object') return null;
-    const productId = String(raw.productId || '').slice(0, 120);
-    const variantId = Number(raw.variantId ?? raw.varient) || 0;
-    const size = String(raw.size || '').slice(0, 20);
-    const quantity = Math.min(10, Math.max(1, Number(raw.quantity) || 1));
-    const varient = String((raw.varient ?? raw.variant ?? variantId) || '').slice(0, 120);
-    if (!productId) return null;
-    return { productId, variantId, size, quantity, varient };
-}
-
-function sanitizeThinCart(items) {
-    if (!Array.isArray(items)) return [];
-    return items.slice(0, 50).map(normalizeCartItem).filter(Boolean);
-}
-
-function mergeThinCarts(primary = [], secondary = []) {
-    const merged = new Map();
-    for (const raw of [...primary, ...secondary]) {
-        const item = normalizeCartItem(raw);
-        if (!item) continue;
-        const key = `${item.productId}:${item.variantId}:${item.size}`;
-        const existing = merged.get(key);
-        if (existing) {
-            existing.quantity = Math.min(99, existing.quantity + item.quantity);
-        } else {
-            merged.set(key, item);
-        }
-    }
-    return [...merged.values()];
-}
-
 const syncUserCacheAndSession = async (user, req) => {
     try {
         const userData = user.toObject();
         delete userData.password; 
         const jsonUser = JSON.stringify(userData);
 
-        // 1. EXTRACT TOKEN SAFELY
         let token = req.cookies?.token;
         if (!token && req.headers.authorization?.toLowerCase().startsWith('bearer ')) {
             token = req.headers.authorization.split(' ')[1];
         }
 
-        // 2. SAFELY REBUILD THE SESSION PAYLOAD
         let updatedSessionString = null;
         if (token) {
             const sessionKey = `session:${token}`;
@@ -106,20 +72,17 @@ const syncUserCacheAndSession = async (user, req) => {
             
             if (existingSessionStr) {
                 const existingSession = JSON.parse(existingSessionStr);
-                // CRITICAL: Keep existing fingerprint, update ONLY the user object
                 existingSession.user = userData; 
                 updatedSessionString = JSON.stringify(existingSession);
             }
         }
 
-        // 3. UPDATE REDIS CACHES
         const redisPromises = [
             redisClient.setEx(`user:id:${user.id}`, 3600, jsonUser),
             redisClient.setEx(`user:email:${user.email || ''}`, 3600, jsonUser),
             redisClient.setEx(`user:phone:${user.phone || ''}`, 3600, jsonUser)
         ];
 
-        // ONLY update the session if we successfully found and wrapped it
         if (token && updatedSessionString) {
             redisPromises.push(redisClient.setEx(`session:${token}`, 3600, updatedSessionString));
         }
@@ -134,15 +97,12 @@ async function processUserSession(user, req, res, messageSuccess) {
     const userData = user.toObject();
     delete userData.password;
 
-    const guestToken = String(req.headers['x-cart-token'] || '').trim();
+    const guestTokenRaw = req.headers['x-cart-token'];
+    const guestToken = String(guestTokenRaw || '').trim().replace(/['"]/g, ''); 
 
-    // 1. Handle Cart Merging Logic
-    const rawUserCart = await redisClient.get(`${CART_PREFIX_USER}${user.id}`);
-    let userCartItems = rawUserCart ? sanitizeThinCart(JSON.parse(rawUserCart)) : [];
-
-    if (!userCartItems.length && Array.isArray(user.cart)) {
-        userCartItems = user.cart.map(normalizeCartItem).filter(Boolean);
-    }
+    // --- CART MERGE LOGIC ---
+    // ALWAYS use user._id to prevent Mongoose CastErrors
+    const userCartItems = await getUserCartItems(user._id);
 
     let guestItems = [];
     if (guestToken && TOKEN_REGEX.test(guestToken)) {
@@ -152,16 +112,15 @@ async function processUserSession(user, req, res, messageSuccess) {
 
     const mergedCart = mergeThinCarts(userCartItems, guestItems);
     
-    // Perform Redis operations for cart and session index
-    // We use consistent camelCase (sAdd) as required by node-redis v4+
-    await redisClient.setEx(`${CART_PREFIX_USER}${user.id}`, TTL_SECONDS, JSON.stringify(mergedCart));
-    await redisClient.sAdd('dirty_carts', String(user.id)).catch(() => {});
+    // Save to the strict Mongoose ID
+    await saveUserCart(user._id, mergedCart);
 
     if (guestToken && TOKEN_REGEX.test(guestToken)) {
         await redisClient.del(`${CART_PREFIX_GUEST}${guestToken}`).catch(() => {});
     }
+    console.log("----------------------------------\n");
 
-    // 2. Session Issuance Logic
+    // --- Session Issuance Logic ---
     const sessionToken = crypto.randomBytes(32).toString('hex');
     const sessionFingerprint = computeSessionFingerprint(req);
     const sessionPayload = {
@@ -178,8 +137,6 @@ async function processUserSession(user, req, res, messageSuccess) {
     const jsonUser = JSON.stringify(userData);
     const jsonSession = JSON.stringify(sessionPayload);
 
-    // 
-    // Parallelizing session storage and indexing
     await Promise.all([
         redisClient.setEx(`user:id:${user.id}`, SESSION_TTL, jsonUser),
         redisClient.setEx(`user:email:${user.email || ''}`, SESSION_TTL, jsonUser),
@@ -190,33 +147,17 @@ async function processUserSession(user, req, res, messageSuccess) {
     ]);
 
     const cookieOptions = buildCookieOptions(req);
-
     res.cookie('token', sessionToken, cookieOptions);
+    
     if (process.env.NODE_ENV !== 'production') {
         res.setHeader('X-Debug-Session-Token', sessionToken);
     }
 
-    const sessionKey = `session:${sessionToken}`;
-    const sessionExists = await redisClient.exists(sessionKey);
-    // console.log('[server][session] issued cookie token and stored session:', {
-    //   sessionKey,
-    //   sessionExists,
-    //   cookieName: 'token',
-    //   cookieOptions,
-    //   responseOrigin: req.headers.origin,
-    //   requestPath: req.originalUrl,
-    //   requestMethod: req.method,
-    // });
-
     return res.json({ success: messageSuccess, user: userData, sessionToken });
 }
 
-
 export const handleContactUsRequest = async (req, res) => {
     try {
-
-
-
         const { userId, name, email, senderEmail, subject, message, recaptchaToken, source } = req.body;
 
         const normalizedEmail = String(email || senderEmail || '').trim().toLowerCase();
@@ -229,25 +170,16 @@ export const handleContactUsRequest = async (req, res) => {
             return res.status(400).json({ error: "All fields (name, email, subject, message) are required." });
         }
 
-
-
-
         try {
             await validateRecaptcha(recaptchaToken);
         } catch (recaptchaError) {
             return res.status(403).json({ error: recaptchaError.message });
         }
 
-
-
-
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         if (!emailRegex.test(normalizedEmail)) {
             return res.status(400).json({ error: "Please provide a valid email address." });
         }
-
-
-
 
         const contactCooldownKey = `cooldown:contact:${normalizedEmail}`;
         const hasSubmittedRecently = await redisClient.get(contactCooldownKey);
@@ -257,10 +189,6 @@ export const handleContactUsRequest = async (req, res) => {
                 error: "You have submitted a request recently. Please wait 2 minutes before trying again."
             });
         }
-
-
-
-
 
         const internalEmailHtml = `
         <div style="max-width: 600px; margin: 0 auto; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border: 1px solid #eaeaea;">
@@ -299,11 +227,7 @@ export const handleContactUsRequest = async (req, res) => {
         </div>
         `;
 
-
-
-
         const siteConfig = await SiteData.findOne({});
-
         const targetSupportEmail = siteConfig?.contact?.email || siteConfig?.checkout?.supportEmail || "vishalsainig009@gmail.com";
 
         if (!siteConfig || !targetSupportEmail) {
@@ -338,9 +262,6 @@ export const handleContactUsRequest = async (req, res) => {
             });
         }
 
-
-
-
         await redisClient.setEx(contactCooldownKey, 120, "locked");
 
         return res.status(200).json({
@@ -349,7 +270,6 @@ export const handleContactUsRequest = async (req, res) => {
         });
 
     } catch (error) {
-
         console.error("Contact Form Pipeline Error Details:", error);
         return res.status(500).json({ error: "Internal server error occurred processing the ticket." });
     }
@@ -392,12 +312,10 @@ export const checkAuthIdentity = async (req, res) => {
                 return res.status(400).json({ error: 'Password is required for login.' });
             }
 
-            // FIX: Prevent crash if user has no password
             if (!existingUser.password) {
                 return res.status(401).json({ error: 'Incorrect password.' });
             }
 
-            // You can safely use your model method here now
             const passwordMatches = await existingUser.comparePassword(String(req.body.password).trim());
             if (!passwordMatches) {
                 return res.status(401).json({ error: 'Incorrect password.' });
@@ -437,8 +355,6 @@ export const checkAuthIdentity = async (req, res) => {
     }
 };
 
-
-
 export const getOTPTemplate = (mode, otp, userName, adminLogin) => {
     const configs = {
         login: {
@@ -456,7 +372,6 @@ export const getOTPTemplate = (mode, otp, userName, adminLogin) => {
             message: "We have received a password reset request for your account. If this wasn't you, please ignore this email.",
             action: "reset your password"
         },
-
     };
 
     const config = configs[mode] || configs.login;
@@ -522,9 +437,6 @@ export const getOTPTemplate = (mode, otp, userName, adminLogin) => {
     }
 };
 
-
-// 1. NEW: Pre-Verification Endpoint
-
 export const verifyLoginCredentials = async (req, res) => {
     try {
         const { email, password, recaptchaToken } = req.body;
@@ -535,7 +447,6 @@ export const verifyLoginCredentials = async (req, res) => {
 
         const normalizedEmail = String(email).trim().toLowerCase();
 
-        // Optional: Keep Recaptcha here to prevent bot brute-forcing passwords
         await validateRecaptcha(recaptchaToken); 
 
         const user = await User.findOne({ email: normalizedEmail }).select("+password");
@@ -549,8 +460,6 @@ export const verifyLoginCredentials = async (req, res) => {
             return res.status(401).json({ error: "Invalid email or password" });
         }
 
-        // SUCCESS! Generate a temporary 10-minute token
-        // This proves to the next route that the user knows their password
         const preAuthToken = jwt.sign(
             { email: normalizedEmail, isPreAuthenticated: true },
             process.env.JWT_SECRET,
@@ -599,7 +508,6 @@ export const requestEmailOTP = async (req, res) => {
             
             if (!password) return res.status(400).json({ error: "Password is required for registration" });
             
-            // Store password temporarily for Step 2
             await redisClient.setEx(`pending:pwd:${normalizedEmail}`, 300, password);
         }
 
@@ -610,11 +518,12 @@ export const requestEmailOTP = async (req, res) => {
         if (!adminLogin) await validateRecaptcha(recaptchaToken);
 
         const cooldownKey = `cooldown:email:${normalizedEmail}`;
-        if (await redisClient.get(cooldownKey)) {
-            return res.status(429).json({ error: "Please wait 60 seconds." });
-        }
+        // if (await redisClient.get(cooldownKey)) {
+        //     return res.status(429).json({ error: "Please wait 60 seconds." });
+        // }
 
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        console.log(otp)
         await redisClient.setEx(`otp:email:${normalizedEmail}`, 300, otp);
         const userName = user ? `${user.firstName} ${user.lastName}` : "Valued User";
 
@@ -651,6 +560,7 @@ export const verifyEmailOTP = async (req, res) => {
             if (!normalizedPhone) return res.status(400).json({ error: 'Phone is required.' });
             user = await User.findOne({ phone: normalizedPhone });
             if (user) lookupEmail = user.email;
+            else return res.status(404).json({ error: 'Phone number not found.' }); 
         }
 
         if (!lookupEmail) return res.status(400).json({ error: 'Email is required for OTP validation.' });
@@ -671,25 +581,17 @@ export const verifyEmailOTP = async (req, res) => {
             }
 
             if (mode === 'register') {
-                // 1. Retrieve the password from the first step
                 const rawPassword = await redisClient.get(`pending:pwd:${lookupEmail}`);
                 if (!rawPassword) {
                     return res.status(400).json({ error: "Registration session expired. Please start over." });
                 }
 
-                // 2. Hash password
                 const hashedPassword = await bcrypt.hash(rawPassword, 10);
                 await redisClient.del(`pending:pwd:${lookupEmail}`);
 
-                // 3. Generate required fields (ID & Unique Placeholder Phone)
                 const generatedId = `USR-${Date.now().toString().slice(-4)}${Math.floor(1000 + Math.random() * 9000)}`;
-                
-                let uniquePlaceholderPhone;
-                do {
-                    uniquePlaceholderPhone = `+9100${Math.floor(10000000 + Math.random() * 90000000)}`;
-                } while (await User.exists({ phone: uniquePlaceholderPhone }));
+                const uniquePlaceholderPhone = `+9100${Date.now()}`; 
 
-                // 4. Create the "Lazy" account
                 user = new User({
                     id: generatedId,
                     email: lookupEmail,
@@ -701,7 +603,6 @@ export const verifyEmailOTP = async (req, res) => {
                 });
                 await user.save();
 
-                // 5. Issue token bound strictly to this new user's Object ID
                 const registrationToken = jwt.sign(
                     { userId: user._id },
                     process.env.JWT_SECRET,
@@ -753,9 +654,7 @@ export const completeRegistration = async (req, res) => {
             isProfileComplete: true
         };
 
-        // Only update the phone if the user actually provided one in this step
         if (normalizedPhone) {
-            // Check if phone belongs to a DIFFERENT user
             const phoneExists = await User.exists({ phone: normalizedPhone, _id: { $ne: userId } });
             if (phoneExists) {
                 return res.status(400).json({ error: "This phone number is already associated with another account." });
@@ -763,11 +662,10 @@ export const completeRegistration = async (req, res) => {
             updateData.phone = normalizedPhone;
         }
 
-        // Update the existing "Lazy" record
         const updatedUser = await User.findByIdAndUpdate(
             userId,
             updateData,
-            { new: true } // Return the updated document
+            { new: true } 
         );
 
         if (!updatedUser) {
@@ -819,7 +717,6 @@ export const resetPassword = async (req, res) => {
     }
 };
 
-
 export const updateUser = async (req, res) => {
     try {
         const { id } = req.user;
@@ -844,7 +741,6 @@ export const updateUser = async (req, res) => {
 
         await user.save();
         
-        // Sync cache & session using the helper
         await syncUserCacheAndSession(user, req);
 
         const userData = user.toObject();
@@ -878,7 +774,6 @@ export const addAddress = async (req, res) => {
         user.addresses.push(newAddress);
         await user.save();
 
-        // Sync cache & session using the helper
         await syncUserCacheAndSession(user, req);
 
         return res.status(201).json({ success: true, message: "Address added successfully", newAddress });
@@ -915,7 +810,6 @@ export const updateAddress = async (req, res) => {
 
         const user = await User.findOneAndUpdate({ id: userId, "addresses._id": _id }, { $set: updateFields }, { new: true, runValidators: true });
         
-        // Sync cache & session using the helper
         await syncUserCacheAndSession(user, req);
 
         return res.status(200).json({ success: "Address updated successfully", updatedAddress: user.addresses.id(_id) });
@@ -940,7 +834,6 @@ export const deleteAddress = async (req, res) => {
         user.addresses.pull(addressId);
         await user.save();
 
-        // Sync cache & session using the helper
         await syncUserCacheAndSession(user, req);
 
         return res.status(200).json({ success: "Address deleted successfully", deletedAddress: addressId });
@@ -1015,7 +908,6 @@ export const deleteUserAdmin = async (req, res) => {
     try {
         const { userId } = req.params;
 
-        // 1. Delete user from MongoDB
         const deletedUser = await User.findOneAndDelete(
             { id: userId }, 
             { returnDocument: 'after' }
@@ -1023,11 +915,9 @@ export const deleteUserAdmin = async (req, res) => {
 
         if (!deletedUser) return res.status(404).json({ error: "User not found" });
 
-        // 2. Fetch tokens using the correct node-redis method: sMembers (camelCase)
         const tokens = await redisClient.sMembers(`user_sessions:${userId}`);
         
         if (tokens && tokens.length > 0) {
-            // node-redis uses multi() instead of pipeline()
             const multi = redisClient.multi();
             
             for (const token of tokens) {
@@ -1035,7 +925,6 @@ export const deleteUserAdmin = async (req, res) => {
             }
             multi.del(`user_sessions:${userId}`);
             
-            // Execute the batch of commands
             await multi.exec();
         }
 
@@ -1045,8 +934,6 @@ export const deleteUserAdmin = async (req, res) => {
         return res.status(500).json({ error: error.message });
     }
 };
-
-
 
 export const getAddresses = async (req, res) => {
     try {
@@ -1070,7 +957,6 @@ export const getAddresses = async (req, res) => {
 
 export const getMe = async (req, res) => {
     try {
-        // console.log('[server][getMe] cookies:', req.cookies, 'user:', req.user?.id);
         if (req.user) {
             return res.status(200).json({ success: true, user: req.user });
         }
@@ -1087,23 +973,19 @@ export const logoutUser = async (req, res) => {
         const isProd = process.env.NODE_ENV === 'production';
         let deletedCount = 0;
 
-
         if (token) {
             try {
-
                 const sessionDel = await redisClient.del(`session:${token}`);
                 deletedCount += sessionDel;
             } catch (err) {
                 console.error('[logout] Error deleting session from redis:', err?.message || err);
             }
 
-
             try {
                 const decoded = jwt.verify(token, process.env.JWT_SECRET);
                 const userId = decoded.id;
 
                 if (userId) {
-
                     const keysToDelete = [
                         `user:id:${userId}`,
                         `user:addresses:${userId}`
@@ -1135,4 +1017,3 @@ export const logoutUser = async (req, res) => {
         return res.status(500).json({ error: 'Failed to logout' });
     }
 };
-

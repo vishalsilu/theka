@@ -57,7 +57,7 @@ export const createCollection = async (req, res) => {
 
         res.status(201).json({ success: true, data: newCollection });
     } catch (error) {
-        if (error.code === 11000) return res.status(400).json({ message: "Collection name must be unique" });
+        if (error.code === 11000) return res.status(400).json({ error: "Collection name must be unique" });
         res.status(500).json({ error: error.message });
     }
 };
@@ -103,11 +103,11 @@ export const toggleCollectionFeatured = async (req, res) => {
         const { isFeatured, featuredCategoryId } = req.body;
 
         if (!featuredCategoryId) {
-            return res.status(400).json({ message: "featuredCategoryId is required" });
+            return res.status(400).json({ error: "featuredCategoryId is required" });
         }
 
         const collection = await Collection.findById(id);
-        if (!collection) return res.status(404).json({ message: "Collection not found" });
+        if (!collection) return res.status(404).json({ error: "Collection not found" });
 
         const isAlreadyFeatured = collection.featured.some(
             (item) => item.featuredCategory.toString() === featuredCategoryId
@@ -116,10 +116,10 @@ export const toggleCollectionFeatured = async (req, res) => {
         let update;
 
         if (isFeatured) {
-            if (isAlreadyFeatured) return res.status(400).json({ message: "Already featured" });
+            if (isAlreadyFeatured) return res.status(400).json({ error: "Already featured" });
             update = { $push: { featured: { isFeatured: true, featuredCategory: featuredCategoryId } } };
         } else {
-            if (!isAlreadyFeatured) return res.status(400).json({ message: "Category wasn't featured" });
+            if (!isAlreadyFeatured) return res.status(400).json({ error: "Category wasn't featured" });
             update = { $pull: { featured: { featuredCategory: featuredCategoryId } } };
         }
 
@@ -149,7 +149,7 @@ export const getCollectionDetails = async (req, res) => {
             .populate('featured.featuredCategory') // Populate the category chosen as featured
             .lean({ virtuals: true });
 
-        if (!collection) return res.status(404).json({ message: "Collection not found" });
+        if (!collection) return res.status(404).json({ error: "Collection not found" });
 
         await redisClient.setEx(cacheKey, 86400, JSON.stringify(collection));
 
@@ -176,7 +176,7 @@ export const updateCollection = async (req, res) => {
 
         // Fetch existing collection to handle image replacement/deletion cleanly
         const existing = await Collection.findById(id);
-        if (!existing) return res.status(404).json({ message: "Not found" });
+        if (!existing) return res.status(404).json({ error: "Not found" });
 
         // If a new file was uploaded, set the image URL and delete the old one
         if (req.file) {
@@ -209,7 +209,7 @@ export const updateCollection = async (req, res) => {
             { new: false, runValidators: true }
         );
 
-        if (!oldCollection) return res.status(404).json({ message: "Not found" });
+        if (!oldCollection) return res.status(404).json({ error: "Not found" });
 
         if (req.body.name) {
             const newName = String(req.body.name).trim();
@@ -223,7 +223,7 @@ export const updateCollection = async (req, res) => {
 
         await clearCollectionCache(id);
 
-        res.status(200).json({ success: true, message: "Collection updated" });
+        res.status(200).json({ success: true, error: "Collection updated" });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -234,11 +234,11 @@ export const deleteCollection = async (req, res) => {
         const { id } = req.params;
         const deleted = await Collection.findByIdAndDelete(id);
         
-        if (!deleted) return res.status(404).json({ message: "Collection not found" });
+        if (!deleted) return res.status(404).json({ error: "Collection not found" });
 
         await clearCollectionCache(id);
 
-        res.status(200).json({ success: true, message: "Collection and related caches deleted" });
+        res.status(200).json({ success: true, error: "Collection and related caches deleted" });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
