@@ -487,29 +487,33 @@ export const getProductsByCollection = async (req, res) => {
 export const getProductsByCategory = async (req, res) => {
     try {
         const { type, category } = req.params;
-        const rawType = type?.replace("-"," ");
-        const rawCategory = category?.replace("-"," ");
 
-        const cacheKey = `products:${rawType.toLowerCase()}:${rawCategory.toLowerCase()}:lite`;
+        // 🔥 THE FIX: Regex allows '-' or ' ' to be interchangeable.
+        // It converts "t-shirt" into a regex that matches "t-shirt" OR "t shirt"
+        // It converts "home-decor" into a regex that matches "home-decor" OR "home decor"
+        const typeRegex = new RegExp(`^${type.replace(/-/g, '[- ]')}$`, 'i');
+        const catRegex = new RegExp(`^${category.replace(/-/g, '[- ]')}$`, 'i');
 
+        const cacheKey = `products:${type.toLowerCase()}:${category.toLowerCase()}:lite`;
+
+        // Cache check
         const cached = await redisClient.get(cacheKey);
         if (cached) {
             try {
                 const parsed = JSON.parse(cached);
-                if (Array.isArray(parsed)) {
-                    if (parsed.length > 0) return res.status(200).json(parsed);
-                    await redisClient.del(cacheKey);
-                }
+                if (Array.isArray(parsed) && parsed.length > 0) return res.status(200).json(parsed);
+                if (Array.isArray(parsed) && parsed.length === 0) await redisClient.del(cacheKey);
             } catch (err) {
-                console.warn('Invalid products-by-category cache value, refreshing from DB:', err?.message || err);
+                console.warn('Invalid cache, refreshing from DB:', err?.message);
                 await redisClient.del(cacheKey);
             }
         }
 
+        // DB Query using the new Regex
         const productsRaw = await Product.find(
             {
-                "collectionInfo.name": { $regex: new RegExp(`^${rawType}$`, 'i') },
-                "categoryInfo.name": { $regex: new RegExp(`^${rawCategory}$`, 'i') },
+                "collectionInfo.name": { $regex: typeRegex },
+                "categoryInfo.name": { $regex: catRegex },
                 status: 'ACTIVE'
             },
             {
@@ -520,6 +524,7 @@ export const getProductsByCategory = async (req, res) => {
             }
         ).lean();
 
+        // Transformation Logic
         const products = productsRaw.map(product => {
             const originalPrice = product.price || 0;
             const discValue = product.discount?.value || 0;
@@ -551,7 +556,7 @@ export const getProductsByCategory = async (req, res) => {
                 id: product.id,
                 name: product.name,
                 price: originalPrice,
-                type: rawType,
+                type: type, // Keeping original URL param
                 salePrice,
                 discountDisplay,
                 fabric: product.fabric,
@@ -570,6 +575,7 @@ export const getProductsByCategory = async (req, res) => {
             };
         });
 
+        // Sorting Logic
         const now2 = new Date();
         products.sort((a, b) => {
             const aActive = a.isSponsored && (!a.sponsorUntil || new Date(a.sponsorUntil) > now2) ? 1 : 0;
@@ -583,6 +589,7 @@ export const getProductsByCategory = async (req, res) => {
 
         res.status(200).json(products);
     } catch (error) {
+        console.error("ProductsByCategory Error:", error);
         res.status(500).json({ error: "Internal Server Error" });
     }
 };
