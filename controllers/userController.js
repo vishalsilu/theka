@@ -518,12 +518,11 @@ export const requestEmailOTP = async (req, res) => {
         if (!adminLogin) await validateRecaptcha(recaptchaToken);
 
         const cooldownKey = `cooldown:email:${normalizedEmail}`;
-        // if (await redisClient.get(cooldownKey)) {
-        //     return res.status(429).json({ error: "Please wait 60 seconds." });
-        // }
+        if (await redisClient.get(cooldownKey)) {
+            return res.status(429).json({ error: "Please wait 60 seconds." });
+        }
 
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
-        console.log(otp)
         await redisClient.setEx(`otp:email:${normalizedEmail}`, 300, otp);
         const userName = user ? `${user.firstName} ${user.lastName}` : "Valued User";
 
