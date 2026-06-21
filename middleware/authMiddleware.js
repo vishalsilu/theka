@@ -30,11 +30,11 @@ const getAuthToken = (req) => {
     return extractTokenCookie(req) || null;
 };
 
+// Backend: Update this function
 const computeSessionFingerprint = (req) => {
+    // Only use user-agent for fingerprinting to avoid GET/POST header mismatches
     const userAgent = String(req.headers['user-agent'] || '').trim().slice(0, 512);
-    const acceptLanguage = String(req.headers['accept-language'] || '').trim().slice(0, 128);
-    const origin = String(req.headers.origin || '').trim().slice(0, 128);
-    return crypto.createHash('sha256').update(`${userAgent}|${acceptLanguage}|${origin}`).digest('hex');
+    return crypto.createHash('sha256').update(`${userAgent}`).digest('hex');
 };
 
 export const resolveUserFromToken = async (token, req) => {
