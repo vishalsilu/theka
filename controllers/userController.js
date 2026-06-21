@@ -808,12 +808,7 @@ export const updateAddress = async (req, res) => {
             updateFields[`addresses.$.${key}`] = updatedAddressData[key];
         }
 
-        // Corrected update line:
-        const user = await User.findOneAndUpdate(
-            { id: userId, "addresses._id": _id }, 
-            { $set: updateFields }, 
-            { returnDocument: 'after', runValidators: true }
-        );
+        const user = await User.findOneAndUpdate({ id: userId, "addresses._id": _id }, { $set: updateFields }, { new: true, runValidators: true });
         
         await syncUserCacheAndSession(user, req);
 
@@ -901,12 +896,7 @@ export const updateUserAdmin = async (req, res) => {
         if (phone !== undefined) patch.phone = String(phone).trim();
         if (role !== undefined) patch.role = String(role).trim();
 
-        const user = await User.findOneAndUpdate(
-            { id: userId }, 
-            patch, 
-            { returnDocument: 'after' }
-        ).select("-password -__v").lean();
-
+        const user = await User.findOneAndUpdate({ id: userId }, patch, { new: true }).select("-password -__v").lean();
         if (!user) return res.status(404).json({ error: "User not found" });
         return res.status(200).json({ success: true, user });
     } catch (error) {
