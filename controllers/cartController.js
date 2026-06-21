@@ -1,78 +1,95 @@
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
+import mongoose from 'mongoose';
 import { redisClient } from '../config/redis.js';
-import Product from "../models/Product.js"
-import User from "../models/Users.js";
+import Product from "../models/Product.js";
+import User from "../models/Users.js"; 
 import { debounceCartSync } from "../utils/cartDebouncer.js";
 
 const CART_PREFIX_USER = 'cart:user:';
 const CART_PREFIX_GUEST = 'cart:guest:';
-const TTL_SECONDS = 60 * 60 * 24 * 30;
-
+const TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
 const TOKEN_REGEX = /^[a-f0-9]{32}$/i;
 
-const parseJwtUserId = (authHeader) => {
-    
-    if (!authHeader || !authHeader.startsWith('Bearer')) return null;
+const getSessionUserId = async (req) => {
+    let token = req.cookies?.token;
+    if (!token && req.headers.authorization?.toLowerCase().startsWith('bearer ')) {
+        token = req.headers.authorization.split(' ')[1];
+    }
+
+    if (!token) return null;
+
     try {
-        const token = authHeader.split(' ')[1];
+        const sessionStr = await redisClient.get(`session:${token}`);
+        if (sessionStr) {
+            const session = JSON.parse(sessionStr);
+            return session.user.id || session.user._id || null; 
+        }
+
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
-                
-        return decoded.id || null;
-    } catch {
+        return decoded.id || decoded.userId || null;
+    } catch (error) {
         return null;
     }
 };
 
-function normalizeCartItem(raw) {
+const extractSafeId = (val) => {
+    if (val === null || val === undefined) return '';
+    if (typeof val === 'object') {
+        if (val._id) return String(val._id).trim();
+        if (val.id) return String(val.id).trim();
+        return ''; 
+    }
+    return String(val).trim();
+};
+
+export function normalizeCartItem(raw) { 
     if (!raw || typeof raw !== 'object') return null;
 
-    const productId = String(raw.productId || '').slice(0, 120);
+    const productId = extractSafeId(raw.productId || raw.product);
+    const variantId = extractSafeId(raw.variantId ?? raw.varient ?? raw.varientId); 
     
-    // Ensure this key name matches your User Schema EXACTLY
-    // If schema says 'varient', use 'varient' here.
-    const variantId = Number(raw.variantId ?? raw.varient); 
-
+    const color = raw.color ? String(raw.color).trim() : '';
     const size = String(raw.size || '').slice(0, 20);
-    // Enforce per-variant+size max quantity of 10
-    const quantity = Math.min(10, Math.max(1, Number(raw.quantity) || 1));
+    const quantity = Math.min(99, Math.max(1, Number(raw.quantity) || 1));
 
-    if (!productId || isNaN(variantId)) return null;
+    if (!productId) return null; 
 
-    return { productId, variantId, size, quantity };
+    return { productId, variantId, color, size, quantity };
 }
 
-function sanitizeThinCart(items) {
+export function sanitizeThinCart(items) { 
     if (!Array.isArray(items)) return [];
-    return items
-        .slice(0, 50)
-        .map(normalizeCartItem)
-        .filter(Boolean);
+    return items.slice(0, 50).map(normalizeCartItem).filter(Boolean);
 }
 
-function mergeThinCarts(primary = [], secondary = []) {
+// 🔥 CRITICAL FIXED MERGE LOGIC FOR NO DOUBLING 🔥
+export function mergeThinCarts(primary = [], secondary = []) { 
     const merged = new Map();
 
-    for (const raw of [...primary, ...secondary]) {
+    // 1. Pehle database (primary) cart ke items map me daalo
+    for (const raw of primary) {
         const item = normalizeCartItem(raw);
         if (!item) continue;
+        const key = `${item.productId}:${item.variantId || 'none'}:${item.size.toLowerCase()}`;
+        merged.set(key, item);
+    }
 
-        const key = `${item.productId}:${item.variantId}:${item.size}`;
-        const existing = merged.get(key);
-
-        if (existing) {
-            existing.quantity = Math.min(10, existing.quantity + item.quantity);
-        } else {
-            // Ensure we never store more than allowed per item
-            item.quantity = Math.min(10, item.quantity);
-            merged.set(key, item);
-        }
+    // 2. Phir guest (secondary) cart ke items check karo
+    for (const raw of secondary) {
+        const item = normalizeCartItem(raw);
+        if (!item) continue;
+        const key = `${item.productId}:${item.variantId || 'none'}:${item.size.toLowerCase()}`;
+        
+        // Agar item already DB se aa chuka hai, toh usko double MAT karo. 
+        // Guest cart wale item ki exact quantity ko final mano (bina purani quantity me plus kiye)
+        merged.set(key, item);
     }
 
     return [...merged.values()];
 }
 
-async function getUserCartItems(userId) {
+export async function getUserCartItems(userId) {
     if (!userId) return [];
 
     const cached = await redisClient.get(`${CART_PREFIX_USER}${userId}`);
@@ -81,13 +98,14 @@ async function getUserCartItems(userId) {
         if (items.length) return items;
     }
 
-    const user = await User.findOne({ id: userId }).select('cart');
+    const isObjectId = mongoose.Types.ObjectId.isValid(userId);
+    const query = isObjectId ? { _id: userId } : { id: userId };
+    
+    const user = await User.findOne(query).select('cart');
     if (!user?.cart?.length) return [];
 
-    const dbItems = user.cart
-        .map(normalizeCartItem)
-        .filter(Boolean);
-
+    const dbItems = user.cart.map(normalizeCartItem).filter(Boolean);
+    
     if (dbItems.length) {
         await redisClient.setEx(`${CART_PREFIX_USER}${userId}`, TTL_SECONDS, JSON.stringify(dbItems));
     }
@@ -95,44 +113,52 @@ async function getUserCartItems(userId) {
     return dbItems;
 }
 
-async function saveUserCart(userId, items) {
+export async function saveUserCart(userId, items) {
     if (!userId) return [];
-    const finalItems = sanitizeThinCart(items);
     
-    // Save to Redis for fast access
+    const finalItems = sanitizeThinCart(items).map(i => ({
+        productId: i.productId,
+        variantId: i.variantId,
+        size: i.size,
+        quantity: i.quantity
+    }));
+    
     await redisClient.setEx(`${CART_PREFIX_USER}${userId}`, TTL_SECONDS, JSON.stringify(finalItems));
     
-    // IMMEDIATELY sync to MongoDB so cart persists even if Redis expires or cron is delayed
+    const isObjectId = mongoose.Types.ObjectId.isValid(userId);
+    const query = isObjectId ? { _id: userId } : { id: userId };
+
     try {
         await User.findOneAndUpdate(
-            { id: userId },
+            query,
             { $set: { cart: finalItems } },
-            { new: true }
+            { returnDocument: 'after' }
         );
     } catch (err) {
         console.error(`Failed to save cart to DB for user ${userId}:`, err);
-        // Mark as dirty for cron retry if immediate save fails
         await redisClient.sAdd('dirty_carts', String(userId)).catch(() => {});
     }
     
     return finalItems;
 }
 
-async function saveGuestCart(cartToken, items) {
+export async function saveGuestCart(cartToken, items) {
     if (!cartToken) return [];
-    const finalItems = sanitizeThinCart(items);
+    const finalItems = sanitizeThinCart(items).map(i => ({
+        productId: i.productId, variantId: i.variantId, size: i.size, quantity: i.quantity
+    }));
     await redisClient.setEx(`${CART_PREFIX_GUEST}${cartToken}`, TTL_SECONDS, JSON.stringify(finalItems));
     return finalItems;
 }
 
 export const getCart = async (req, res) => {
     try {
-        const userId = parseJwtUserId(req.headers.authorization);
+        const userId = await getSessionUserId(req);
         const cartToken = String(req.headers['x-cart-token'] || '').trim();
 
         let thinItems = [];
         let bucket = 'guest';
-
+        
         if (userId) {
             thinItems = await getUserCartItems(userId);
             bucket = 'user';
@@ -142,39 +168,44 @@ export const getCart = async (req, res) => {
         }
 
         if (thinItems.length === 0) return res.status(200).json({ items: [], bucket });
-
+        
         const productIds = [...new Set(thinItems.map(i => i.productId))];
-        const products = await Product.find({ id: { $in: productIds } });
-
+        const products = await Product.find({ 
+            $or: [
+                { id: { $in: productIds } }, 
+                { _id: { $in: productIds.filter(id => mongoose.Types.ObjectId.isValid(id)) } }
+            ] 
+        });
+        
         const fullItems = thinItems.map(cartItem => {
-            const product = products.find(p => p.id === cartItem.productId);
+            const product = products.find(p => String(p.id || p._id) === String(cartItem.productId));
             if (!product) return null;
-
-            const variant = product.variants.find(v => v.id === cartItem.variantId);
-            if (!variant) return null;
-
-            const sizeInfo = variant.sizes.find(s => s.size === cartItem.size);
-            const availableStock = sizeInfo ? sizeInfo.stock : 0;
-
+            
+            const variant = product.variants?.find(v => String(v.id || v._id) === String(cartItem.variantId));
+            if (product.variants?.length > 0 && !variant) return null; 
+            
+            const sizeInfo = variant ? variant.sizes?.find(s => String(s.size).trim().toLowerCase() === String(cartItem.size).trim().toLowerCase()) : null;
+            const availableStock = sizeInfo ? sizeInfo.stock : 99; 
+            
             return {
-                productId: product.id,
-                variantId: variant.id,
+                productId: product.id || product._id,
+                variantId: variant ? (variant.id || variant._id) : '',
                 name: product.name,
-                color: variant.color,
+                color: variant ? variant.color : null,
                 size: cartItem.size,
-                image: variant.images[0],
+                image: variant?.images?.[0] ? variant.images[0] : (product.images?.[0] || null),
                 price: product.price,
                 fit: product?.fit,
                 salePrice: product.salePrice,
                 discountDisplay: product.discountDisplay,
-                quantity: Math.min(cartItem.quantity, availableStock, 10),
+                quantity: Math.min(cartItem.quantity, availableStock, 99),
                 stock: availableStock,
                 inStock: availableStock > 0,
                 type: product.collectionInfo?.name,
                 category: product.categoryInfo?.name,
             };
         }).filter(Boolean);
-
+        
         return res.status(200).json({
             items: fullItems,
             cartToken: userId ? null : cartToken,
@@ -186,44 +217,39 @@ export const getCart = async (req, res) => {
         return res.status(500).json({ error: 'Failed to sync cart with database' });
     }
 };
+
 export const putCart = async (req, res) => {
     try {
-        const userId = parseJwtUserId(req.headers.authorization);
-        let cartToken = String(req.headers['x-cart-token'] || '').trim();
+        const userId = await getSessionUserId(req);
+        let cartToken = String(req.headers['x-cart-token'] || '').trim().replace(/['"]/g, '');
         
-        const requestedItems = sanitizeThinCart(req.body?.items);
+        const rawRequested = sanitizeThinCart(req.body?.items);
+        const requestedItems = mergeThinCarts([], rawRequested); 
         
-        // VALIDATE STOCK BEFORE SAVING — Fetch products and check available stock
         const validatedItems = [];
         const productIds = [...new Set(requestedItems.map(i => i.productId))];
         
         if (productIds.length > 0) {
-            const products = await Product.find({ id: { $in: productIds } }).lean();
+            const products = await Product.find({ 
+                $or: [
+                    { id: { $in: productIds } }, 
+                    { _id: { $in: productIds.filter(id => mongoose.Types.ObjectId.isValid(id)) } }
+                ] 
+            }).lean();
             
             for (const item of requestedItems) {
-                const product = products.find(p => p.id === item.productId);
+                const product = products.find(p => String(p.id || p._id) === String(item.productId));
+                if (!product) continue;
                 
-                if (!product) {
-                    // Skip items where product no longer exists
-                    continue;
-                }
+                const variant = product.variants?.find(v => String(v.id || v._id) === String(item.variantId));
+                if (product.variants?.length > 0 && !variant) continue;
                 
-                const variant = product.variants?.find(v => v.id === item.variantId);
-                if (!variant) {
-                    // Skip items where variant no longer exists
-                    continue;
-                }
+                const sizeInfo = variant ? variant.sizes?.find(s => String(s.size).trim().toLowerCase() === String(item.size).trim().toLowerCase()) : null;
+                const availableStock = sizeInfo ? sizeInfo.stock : 99; 
                 
-                const sizeInfo = variant.sizes?.find(s => s.size === item.size);
-                const availableStock = sizeInfo?.stock || 0;
+                if (availableStock <= 0) continue;
                 
-                if (availableStock <= 0) {
-                    // Skip out-of-stock items
-                    continue;
-                }
-                
-                // Enforce stock limit: cap quantity at available stock (but also respect max 10 per item)
-                const validatedQuantity = Math.min(item.quantity, availableStock, 10);
+                const validatedQuantity = Math.min(item.quantity, availableStock, 99);
                 
                 validatedItems.push({
                     productId: item.productId,
@@ -237,11 +263,11 @@ export const putCart = async (req, res) => {
         const finalItems = sanitizeThinCart(validatedItems);
         
         if (userId) {
-            // 1. Save to Redis instantly (keeps app responsive)
             await saveUserCart(userId, finalItems);
             
-            // 2. Trigger real-time debounce check
-            debounceCartSync(userId); 
+            if (typeof debounceCartSync === 'function') {
+                debounceCartSync(String(userId)); 
+            }
 
             if (cartToken && TOKEN_REGEX.test(cartToken)) {
                 await saveGuestCart(cartToken, finalItems);
@@ -271,26 +297,23 @@ export const putCart = async (req, res) => {
     }
 };
 
+// 🔥 PRESERVE ON LOGOUT LOGIC RESTORED 🔥
 export const logoutAndPreserveCart = async (req, res) => {
     try {
-        const userId = parseJwtUserId(req.headers.authorization);
-        const cartToken = String(req.headers['x-cart-token'] || '').trim();
+        const userId = await getSessionUserId(req);
+        const cartToken = String(req.headers['x-cart-token'] || '').trim().replace(/['"]/g, '');
 
-        if (!userId) {
-            return res.status(401).json({ error: 'Please login again' });
+        let preservedToken = cartToken && TOKEN_REGEX.test(cartToken) 
+            ? cartToken 
+            : crypto.randomBytes(16).toString('hex');
+
+        let userItems = [];
+        if (userId) {
+            userItems = await getUserCartItems(userId);
         }
 
-        const userItems = await getUserCartItems(userId);
-        let guestItems = [];
-        let preservedToken = cartToken && TOKEN_REGEX.test(cartToken) ? cartToken : crypto.randomBytes(16).toString('hex');
-
-        if (cartToken && TOKEN_REGEX.test(cartToken)) {
-            const raw = await redisClient.get(`${CART_PREFIX_GUEST}${cartToken}`);
-            guestItems = raw ? sanitizeThinCart(JSON.parse(raw)) : [];
-        }
-
-        const mergedItems = mergeThinCarts(userItems, guestItems);
-        await saveGuestCart(preservedToken, mergedItems);
+        // Isko wapas clone kar diya taaki logout hone par items screen se gayab na hon
+        await saveGuestCart(preservedToken, userItems);
 
         return res.status(200).json({
             cartToken: preservedToken,
@@ -302,22 +325,23 @@ export const logoutAndPreserveCart = async (req, res) => {
     }
 };
 
-
 export const clearCart = async (req, res) => {
     try {
-        const userId = parseJwtUserId(req.headers.authorization);
+        const userId = await getSessionUserId(req);
         const cartToken = String(req.headers['x-cart-token'] || '').trim();
 
         if (userId) {
-            // Clear from Redis
             await redisClient.del(`${CART_PREFIX_USER}${userId}`).catch(() => {});
-            // Clear from MongoDB
+            
+            const isObjectId = mongoose.Types.ObjectId.isValid(userId);
+            const query = isObjectId ? { _id: userId } : { id: userId };
+
             await User.findOneAndUpdate(
-                { id: userId },
+                query,
                 { $set: { cart: [] } }
             ).catch(() => {});
+
         } else if (cartToken && TOKEN_REGEX.test(cartToken)) {
-            // Clear guest cart from Redis only (guests don't have MongoDB)
             await redisClient.del(`${CART_PREFIX_GUEST}${cartToken}`).catch(() => {});
         }
 
