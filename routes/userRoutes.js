@@ -27,7 +27,7 @@ const routes = express.Router()
 
 routes.post('/email/check-identity', checkAuthIdentity);
 routes.post('/verify-credentials', verifyLoginCredentials);
-routes.post('/email/send-otp',  requestEmailOTP);
+routes.post('/email/send-otp', otpLimiter, requestEmailOTP);
 routes.post('/email/verify-otp', verifyEmailOTP);
 routes.post('/email/reset-password', resetPassword);
 routes.post('/email/complete-registration', completeRegistration);

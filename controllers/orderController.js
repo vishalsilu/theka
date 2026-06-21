@@ -6,10 +6,6 @@ import Invoice from "../models/Invoice.js";
 import SiteData from "../models/SiteData.js";
 import { evaluateCoupon } from "./couponController.js";
 import { redisClient } from "../config/redis.js";
-import { sendEmail } from "../config/email.js";
-import generateOrderInvoiceHtml from "../utils/emailTemplates.js"
-import { sendMyInvoice } from "../utils/sendMyInvoice.js";
-// Adjust the path to wherever your SiteData model file lives
 
 const today = () => new Date().toISOString().split("T")[0];
 
@@ -184,8 +180,6 @@ export const finalizeRazorpayOrder = async ({ order, paymentDetails = {}, eventL
 };
 
 // --- CREATE ORDER ---
-// Add this import at the top of your file (adjust the path to your actual email utility)
-
 export const createOrder = async (req, res) => {
   try {
     const userId = req.user?.id;
@@ -219,14 +213,14 @@ export const createOrder = async (req, res) => {
 
       const thumbnail = variant?.images?.[0] || product.variants?.[0]?.images?.[0] || "";
       let salePrice = product.price || 0;
-      const discValue = product.discount?.value || 0;
-      const discType = product.discount?.type || 'none';
+const discValue = product.discount?.value || 0;
+const discType = product.discount?.type || 'none';
 
-      if (discType === 'percentage' && discValue > 0) {
-        salePrice = salePrice - (salePrice * (discValue / 100));
-      } else if (discType === 'amount' && discValue > 0) {
-        salePrice = Math.max(0, salePrice - discValue);
-      }
+if (discType === 'percentage' && discValue > 0) {
+    salePrice = salePrice - (salePrice * (discValue / 100));
+} else if (discType === 'amount' && discValue > 0) {
+    salePrice = Math.max(0, salePrice - discValue);
+}
 
       enrichedItems.push({
         productId,
@@ -242,9 +236,7 @@ export const createOrder = async (req, res) => {
       });
     }
 
-    // 🔥 FETCH SITE DATA ONCE 🔥
-    const siteData = await SiteData.findOne({}).lean() || {};
-    
+    const siteData = await SiteData.findOne({}).lean();
     const paymentMethod = String(req.body?.paymentMethod || "cod").trim();
     const couponCode = String(req.body?.coupon?.code || "").trim().toUpperCase();
 
@@ -325,23 +317,26 @@ export const createOrder = async (req, res) => {
         await applyCouponUsage(couponCode, userId);
       }
 
-      // REDUCE STOCK & INCREMENT SALES
+      // REDUCE STOCK & INCREMENT SALES — do this before returning
       await reduceStockForOrder(enrichedItems);
 
-      // CLEAR CART
+      // CLEAR CART & INVALIDATE USER ORDERS CACHE
       await clearUserCart(userId);
 
-      // PRODUCT CACHE INVALIDATION
+      // PRODUCT CACHE INVALIDATION — Fetch product details to build explicit cache keys
       try {
         const keysToDelete = new Set(["products:all", "products:featured"]);
 
+        // Fetch each product to get collection/category info for explicit cache invalidation
         for (const item of enrichedItems) {
           try {
             const product = await Product.findOne({ id: item.productId }).lean();
             if (product) {
+              // Add product detail cache key
               keysToDelete.add(`product:detail:${product.id}`);
               keysToDelete.add(`product:detail:${product._id}`);
 
+              // Add collection/category specific cache keys
               const collectionName = product.collectionInfo?.name || '';
               const categoryName = product.categoryInfo?.name || '';
               const collectionId = String(product.collectionInfo?.id || product.collectionInfo?._id || '');
@@ -359,11 +354,13 @@ export const createOrder = async (req, res) => {
           }
         }
 
+        // Delete all explicit keys at once
         const keysArray = Array.from(keysToDelete).filter(Boolean);
         if (keysArray.length > 0) {
           await redisClient.del(...keysArray).catch(() => {});
         }
 
+        // Pattern-based sweep as safety net for any remaining list caches
         try {
           for await (const key of redisClient.scanIterator({ MATCH: "products:*" })) {
             await redisClient.del(key).catch(() => {});
@@ -376,23 +373,15 @@ export const createOrder = async (req, res) => {
         }
       } catch (err) { console.warn("Cache invalidation error", err); }
 
-      // Create invoice database record
-      let invoice = null;
+      // Create invoice record (immutable) for this order and then return
       try {
         const { createInvoiceForOrder } = await import('./invoiceController.js');
-        invoice = await createInvoiceForOrder({ order });
+        const invoice = await createInvoiceForOrder({ order });
+        return res.status(201).json({ success: true, order, invoice, shipping: order.shipping });
       } catch (invErr) {
         console.warn('Invoice creation failed', invErr);
+        return res.status(201).json({ success: true, order, shipping: order.shipping });
       }
-
-      // 🔥 FIRE THE EMAIL HERE 🔥
-      try {
-        await sendMyInvoice(order.orderId)
-      } catch (emailErr) {
-        console.error("Non-fatal: Failed to send order confirmation email:", emailErr);
-      }
-
-      return res.status(201).json({ success: true, order, invoice, shipping: order.shipping });
     }
 
     return res.status(201).json({ success: true, order, shipping: order.shipping });
@@ -662,32 +651,19 @@ export const submitOrderReviews = async (req, res) => {
 // --- REMAINING ADMIN CONTROLLERS ---
 export const getAllOrdersAdmin = async (req, res) => {
   try {
-    // 1. Removed 'includeDrafts' from req.query since we don't care anymore
-    const { status, q, sortBy, sortOrder } = req.query; 
+    const { status, q, sortBy, sortOrder, includeDrafts } = req.query;
     const query = {};
 
-    // 🔥 DELETED THE isDraft IF-STATEMENT HERE 🔥
-    // Now MongoDB will pull all 16 orders, guaranteed.
+    if (includeDrafts !== 'true') {
+      query.isDraft = false;
+    }
 
-    // 2. Handle Status 
-    if (
-      status && 
-      status !== 'undefined' && 
-      status !== 'null' && 
-      status.trim().toLowerCase() !== "all"
-    ) {
+    if (status && status !== "All") {
       query.status = status;
     }
 
-    // 3. Handle Search 
-    if (
-      q && 
-      q !== 'undefined' && 
-      q !== 'null' && 
-      String(q).trim() !== ""
-    ) {
+    if (q) {
       const search = new RegExp(String(q).trim(), "i");
-      
       query.$or = [
         { orderId: search },
         { paymentMethod: search },
@@ -705,12 +681,10 @@ export const getAllOrdersAdmin = async (req, res) => {
 
     const field = sortBy === "total" ? "total" : "createdAt";
     const direction = sortOrder === "asc" ? 1 : -1;
-
     const orders = await Order.find(query).sort({ [field]: direction }).lean();
 
     return res.status(200).json({ success: true, orders });
   } catch (error) {
-    console.error("Fetch orders error:", error);
     return res.status(500).json({ error: error.message });
   }
 };

@@ -172,8 +172,6 @@ export const deleteCategory = async (req, res) => {
     try {
         const { id } = req.params;
 
-        
-
         // 1. Delete the category
         const deletedCategory = await Category.findByIdAndDelete(id);
 
