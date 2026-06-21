@@ -138,10 +138,11 @@ export async function saveUserCart(userId, items) {
 
     // IMMEDIATELY sync to MongoDB
     try {
+        // Corrected update line:
         await User.findOneAndUpdate(
             query,
             { $set: { cart: finalItems } },
-            { new: true }
+            { returnDocument: 'after' }
         );
     } catch (err) {
         console.error(`Failed to save cart to DB for user ${userId}:`, err);
