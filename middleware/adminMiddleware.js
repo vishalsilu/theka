@@ -1,14 +1,14 @@
 export const adminOnly = (req, res, next) => {
   // 1. Check if user exists
   if (!req.user) {
-    return res.status(200).json({ error: "Not authorized: No user found" });
+    return res.status(200).json({ success:false, error: "Not authorized: No user found" });
   }
 
   // 2. Normalize role check (handle case sensitivity)
   const userRole = String(req.user.role || '').toLowerCase();
   
   if (userRole !== "admin") {
-    return res.status(403).json({ error: "Admin access required" });
+    return res.status(403).json({success:false, error: "Admin access required" });
   }
 
   next();
