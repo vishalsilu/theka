@@ -966,7 +966,7 @@ export const getMe = async (req, res) => {
         if (req.user) {
             return res.status(200).json({ success: true, user: req.user });
         }
-        return res.status(404).json({ alert: "User not found" });
+        return res.status(200).json({ alert: "User not found" });
     } catch (error) {
         console.error('[server][getMe] error:', error);
         return res.status(500).json({ message: error.message });
