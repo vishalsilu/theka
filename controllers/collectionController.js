@@ -107,7 +107,7 @@ export const toggleCollectionFeatured = async (req, res) => {
         }
 
         const collection = await Collection.findById(id);
-        if (!collection) return res.status(404).json({ message: "Collection not found" });
+        if (!collection) return res.status(200).json({ message: "Collection not found" });
 
         const isAlreadyFeatured = collection.featured.some(
             (item) => item.featuredCategory.toString() === featuredCategoryId
@@ -149,7 +149,7 @@ export const getCollectionDetails = async (req, res) => {
             .populate('featured.featuredCategory') // Populate the category chosen as featured
             .lean({ virtuals: true });
 
-        if (!collection) return res.status(404).json({ message: "Collection not found" });
+        if (!collection) return res.status(200).json({ message: "Collection not found" });
 
         await redisClient.setEx(cacheKey, 86400, JSON.stringify(collection));
 
@@ -176,7 +176,7 @@ export const updateCollection = async (req, res) => {
 
         // Fetch existing collection to handle image replacement/deletion cleanly
         const existing = await Collection.findById(id);
-        if (!existing) return res.status(404).json({ message: "Not found" });
+        if (!existing) return res.status(200).json({ message: "Not found" });
 
         // If a new file was uploaded, set the image URL and delete the old one
         if (req.file) {
@@ -209,7 +209,7 @@ export const updateCollection = async (req, res) => {
             { new: false, runValidators: true }
         );
 
-        if (!oldCollection) return res.status(404).json({ message: "Not found" });
+        if (!oldCollection) return res.status(200).json({ message: "Not found" });
 
         if (req.body.name) {
             const newName = String(req.body.name).trim();
@@ -234,7 +234,7 @@ export const deleteCollection = async (req, res) => {
         const { id } = req.params;
         const deleted = await Collection.findByIdAndDelete(id);
         
-        if (!deleted) return res.status(404).json({ message: "Collection not found" });
+        if (!deleted) return res.status(200).json({ message: "Collection not found" });
 
         await clearCollectionCache(id);
 

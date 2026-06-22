@@ -183,7 +183,7 @@ export const finalizeRazorpayOrder = async ({ order, paymentDetails = {}, eventL
 export const createOrder = async (req, res) => {
   try {
     const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ error: "Not authorized" });
+    if (!userId) return res.status(200).json({ error: "Not authorized" });
 
     const clientItems = Array.isArray(req.body?.items) ? req.body.items : [];
     if (!clientItems.length) return res.status(400).json({ error: "Cart is empty" });
@@ -200,7 +200,7 @@ export const createOrder = async (req, res) => {
       }
 
       const product = await Product.findOne({ id: productId }).lean();
-      if (!product) return res.status(404).json({ error: `Product ${productId} not found` });
+      if (!product) return res.status(200).json({ error: `Product ${productId} not found` });
 
       const variant = product.variants?.find(v => v.id === variantId);
       const sizeObj = variant?.sizes?.find(s => s.size === size);
@@ -427,7 +427,7 @@ export const getOrderById = async (req, res) => {
     }
 
     const order = await Order.findOne({ orderId }).lean();
-    if (!order) return res.status(404).json({ error: "Order not found" });
+    if (!order) return res.status(200).json({ error: "Order not found" });
 
     // if (order.userId !== userId && req.user?.role !== "Admin") return res.status(403).json({ error: "Forbidden" });
 
@@ -445,7 +445,7 @@ export const updateOrderStatusAdmin = async (req, res) => {
     const { status, location } = req.body;
     
     const order = await Order.findOne({ orderId });
-    if (!order) return res.status(404).json({ error: "Order not found" });
+    if (!order) return res.status(200).json({ error: "Order not found" });
 
     order.status = status;
     order.tracking.push({ status, date: today(), location: location || "Updated by admin" });
@@ -468,7 +468,7 @@ export const cancelOrder = async (req, res) => {
     const { orderId } = req.params;
 
     const order = await Order.findOne({ orderId });
-    if (!order) return res.status(404).json({ error: "Order not found" });
+    if (!order) return res.status(200).json({ error: "Order not found" });
 
     if (order.userId !== userId && req.user?.role !== "Admin") return res.status(403).json({ error: "Forbidden" });
     if (order.status === "Delivered") return res.status(400).json({ error: "Cannot cancel delivered order" });
@@ -496,11 +496,11 @@ export const submitOrderReviews = async (req, res) => {
     const userId = req.user?.id;
     const { orderId } = req.params;
 
-    if (!userId) return res.status(401).json({ error: "Not authorized" });
+    if (!userId) return res.status(200).json({ error: "Not authorized" });
 
     // Fetch full document to leverage model mutations safely
     const order = await Order.findOne({ orderId });
-    if (!order) return res.status(404).json({ error: "Order not found" });
+    if (!order) return res.status(200).json({ error: "Order not found" });
     
     if (order.userId !== userId && req.user?.role !== "Admin") return res.status(403).json({ error: "Forbidden" });
     if (order.status !== "Delivered") return res.status(400).json({ error: "Reviews are only allowed for delivered orders" });
@@ -694,7 +694,7 @@ export const updateOrderAdmin = async (req, res) => {
     const { orderId } = req.params;
     const patch = { ...req.body };
     const order = await Order.findOneAndUpdate({ orderId }, patch, { new: true });
-    if (!order) return res.status(404).json({ error: "Order not found" });
+    if (!order) return res.status(200).json({ error: "Order not found" });
 
     await redisClient.del(`order:detail:${orderId}`);
     await redisClient.del(`orders:user:${order.userId}`);
@@ -709,7 +709,7 @@ export const deleteOrderAdmin = async (req, res) => {
   try {
     const { orderId } = req.params;
     const deleted = await Order.findOneAndDelete({ orderId });
-    if (!deleted) return res.status(404).json({ error: "Order not found" });
+    if (!deleted) return res.status(200).json({ error: "Order not found" });
 
     await redisClient.del(`order:detail:${orderId}`);
     await redisClient.del(`orders:user:${deleted.userId}`);
@@ -727,7 +727,7 @@ export const issueRefundAdmin = async (req, res) => {
     const { items = [], adjustment = 0, note = '', method = 'original' } = req.body;
 
     const order = await Order.findOne({ orderId });
-    if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (!order) return res.status(200).json({ error: 'Order not found' });
 
     // Calculate refund amount from items
     let refundAmount = 0;
@@ -813,7 +813,7 @@ export const createAdjustmentAdmin = async (req, res) => {
     if (Number.isNaN(amt)) return res.status(400).json({ error: 'Invalid amount' });
 
     const order = await Order.findOne({ orderId });
-    if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (!order) return res.status(200).json({ error: 'Order not found' });
     if (req.user?.role !== 'Admin') return res.status(403).json({ error: 'Forbidden' });
 
     const adjType = String(type || 'price');
@@ -857,11 +857,11 @@ export const reverseAdjustmentAdmin = async (req, res) => {
   try {
     const { orderId, adjId } = req.params;
     const order = await Order.findOne({ orderId });
-    if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (!order) return res.status(200).json({ error: 'Order not found' });
     if (req.user?.role !== 'Admin') return res.status(403).json({ error: 'Forbidden' });
 
     const existing = (order.adjustments || []).find(a => a.id === adjId);
-    if (!existing) return res.status(404).json({ error: 'Adjustment not found' });
+    if (!existing) return res.status(200).json({ error: 'Adjustment not found' });
     if (existing.reversed) return res.status(400).json({ error: 'Adjustment already reversed' });
 
     const reversal = {

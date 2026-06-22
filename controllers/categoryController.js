@@ -118,7 +118,7 @@ export const updateCategory = async (req, res) => {
 
         // 1. Fetch current category to handle image deletion & parent checks
         const category = await Category.findById(id);
-        if (!category) return res.status(404).json({ message: "Category not found" });
+        if (!category) return res.status(200).json({ message: "Category not found" });
 
         // 2. Handle Image Update
         if (req.file) {
@@ -176,7 +176,7 @@ export const deleteCategory = async (req, res) => {
         const deletedCategory = await Category.findByIdAndDelete(id);
 
         if (!deletedCategory) {
-            return res.status(404).json({ message: "Category not found" });
+            return res.status(200).json({ message: "Category not found" });
         }
 
         // 2. Clear references in Collections

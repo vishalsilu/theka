@@ -116,7 +116,6 @@ async function processUserSession(user, req, res, messageSuccess) {
         await redisClient.del(`${CART_PREFIX_GUEST}${guestToken}`).catch(() => {});
     }
 
-    // 🔥 THE FIX: Inject the merged cart into the response so React doesn't wipe the screen
     userData.cart = mergedCart;
     
     const sessionToken = crypto.randomBytes(32).toString('hex');
@@ -151,7 +150,7 @@ async function processUserSession(user, req, res, messageSuccess) {
         res.setHeader('X-Debug-Session-Token', sessionToken);
     }
 
-    return res.json({ success: messageSuccess, user: userData, sessionToken });
+    return res.json({ success: true, message: messageSuccess, user: userData, sessionToken });
 }
 
 export const handleContactUsRequest = async (req, res) => {
@@ -165,27 +164,25 @@ export const handleContactUsRequest = async (req, res) => {
         const ticketSource = String(source || 'contact_form').trim();
 
         if (!cleanName || !normalizedEmail || !cleanSubject || !cleanMessage) {
-            return res.status(400).json({ error: "All fields (name, email, subject, message) are required." });
+            return res.status(200).json({ success: false, error: "All fields (name, email, subject, message) are required." });
         }
 
         try {
             await validateRecaptcha(recaptchaToken);
         } catch (recaptchaError) {
-            return res.status(403).json({ error: recaptchaError.message });
+            return res.status(200).json({ success: false, error: recaptchaError.message });
         }
 
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         if (!emailRegex.test(normalizedEmail)) {
-            return res.status(400).json({ error: "Please provide a valid email address." });
+            return res.status(200).json({ success: false, error: "Please provide a valid email address." });
         }
 
         const contactCooldownKey = `cooldown:contact:${normalizedEmail}`;
         const hasSubmittedRecently = await redisClient.get(contactCooldownKey);
 
         if (hasSubmittedRecently) {
-            return res.status(429).json({
-                error: "You have submitted a request recently. Please wait 2 minutes before trying again."
-            });
+            return res.status(200).json({ success: false, error: "You have submitted a request recently. Please wait 2 minutes before trying again." });
         }
 
         const internalEmailHtml = `
@@ -229,7 +226,7 @@ export const handleContactUsRequest = async (req, res) => {
         const targetSupportEmail = siteConfig?.contact?.email || siteConfig?.checkout?.supportEmail || "vishalsainig009@gmail.com";
 
         if (!siteConfig || !targetSupportEmail) {
-            return res.status(500).json({ error: "Support contact email is not configured properly. Please try again later." });
+            return res.status(500).json({ success: false, error: "Support contact email is not configured properly. Please try again later." });
         }
 
         const supportTicket = await SupportTicket.create({
@@ -255,6 +252,7 @@ export const handleContactUsRequest = async (req, res) => {
 
         if (!mailResult || mailResult.success === false) {
             return res.status(500).json({
+                success: false,
                 error: "Failed to process your request at this time.",
                 details: mailResult?.error || "Mail transmission handshake failure"
             });
@@ -262,14 +260,11 @@ export const handleContactUsRequest = async (req, res) => {
 
         await redisClient.setEx(contactCooldownKey, 120, "locked");
 
-        return res.status(200).json({
-            success: true,
-            message: "Your message has been received! Our support team will get back to you shortly."
-        });
+        return res.status(200).json({ success: true, message: "Your message has been received! Our support team will get back to you shortly." });
 
     } catch (error) {
         console.error("Contact Form Pipeline Error Details:", error);
-        return res.status(500).json({ error: "Internal server error occurred processing the ticket." });
+        return res.status(500).json({ success: false, error: "Internal server error occurred processing the ticket." });
     }
 };
 
@@ -278,7 +273,7 @@ export const checkAuthIdentity = async (req, res) => {
         const { mode, identifierType = 'email', email, phone, adminLogin } = req.body;
 
         if (!mode || !['login', 'register', 'forgot'].includes(mode)) {
-            return res.status(400).json({ error: 'Auth mode must be login, register, or forgot.' });
+            return res.status(200).json({ success: false, error: 'Auth mode must be login, register, or forgot.' });
         }
 
         const normalizedEmail = email ? String(email).trim().toLowerCase() : '';
@@ -286,42 +281,42 @@ export const checkAuthIdentity = async (req, res) => {
         const effectiveIdentifierType = identifierType === 'phone' ? 'phone' : 'email';
 
         if (effectiveIdentifierType === 'email' && !normalizedEmail) {
-            return res.status(400).json({ error: 'Email is required for email authentication.' });
+            return res.status(200).json({ success: false, error: 'Email is required for email authentication.' });
         }
 
         if (effectiveIdentifierType === 'phone' && !normalizedPhone) {
-            return res.status(400).json({ error: 'Phone number is required for phone authentication.' });
+            return res.status(200).json({ success: false, error: 'Phone number is required for phone authentication.' });
         }
 
-      const existingUser = effectiveIdentifierType === 'email'
+        const existingUser = effectiveIdentifierType === 'email'
             ? await User.findOne({ email: normalizedEmail }).select('+password')
             : await User.findOne({ phone: normalizedPhone }).select('+password');
 
         if (mode === 'login') {
             if (!existingUser) {
-                return res.status(404).json({ error: `No account found with this ${identifierType}.` });
+                return res.status(200).json({ success: false, error: `No account found with this ${identifierType}.` });
             }
 
             if (adminLogin && existingUser.role !== 'Admin') {
-                return res.status(403).json({ error: 'Invalid admin user.' });
+                return res.status(200).json({ success: false, error: 'Invalid admin user.' });
             }
 
             if (!req.body.password || !String(req.body.password).trim()) {
-                return res.status(400).json({ error: 'Password is required for login.' });
+                return res.status(200).json({ success: false, error: 'Password is required for login.' });
             }
 
             if (!existingUser.password) {
-                return res.status(401).json({ error: 'Incorrect password.' });
+                return res.status(200).json({ success: false, error: 'Incorrect password.' });
             }
 
             const passwordMatches = await existingUser.comparePassword(String(req.body.password).trim());
             if (!passwordMatches) {
-                return res.status(401).json({ error: 'Incorrect password.' });
+                return res.status(200).json({ success: false, error: 'Incorrect password.' });
             }
         }
         if (mode === 'forgot') {
             if (!existingUser) {
-                return res.status(404).json({ error: `No account found with this ${identifierType}.` });
+                return res.status(200).json({ success: false, error: `No account found with this ${identifierType}.` });
             }
 
             return res.status(200).json({
@@ -336,7 +331,7 @@ export const checkAuthIdentity = async (req, res) => {
 
         if (mode === 'register') {
             if (existingUser) {
-                return res.status(409).json({ error: `This ${identifierType} is already registered.` });
+                return res.status(200).json({ success: false, error: `This ${identifierType} is already registered.` });
             }
 
             return res.status(200).json({
@@ -346,10 +341,10 @@ export const checkAuthIdentity = async (req, res) => {
             });
         }
 
-        return res.status(400).json({ error: 'Invalid auth check request.' });
+        return res.status(200).json({ success: false, error: 'Invalid auth check request.' });
     } catch (error) {
         console.error('Auth identity check error:', error);
-        return res.status(500).json({ error: 'Internal server error during identity verification.' });
+        return res.status(500).json({ success: false, error: 'Internal server error during identity verification.' });
     }
 };
 
@@ -440,7 +435,7 @@ export const verifyLoginCredentials = async (req, res) => {
         const { email, password, recaptchaToken } = req.body;
         
         if (!email || !password) {
-            return res.status(400).json({ error: "Email and password are required" });
+            return res.status(200).json({ success: false, error: "Email and password are required" });
         }
 
         const normalizedEmail = String(email).trim().toLowerCase();
@@ -450,12 +445,12 @@ export const verifyLoginCredentials = async (req, res) => {
         const user = await User.findOne({ email: normalizedEmail }).select("+password");
         
         if (!user || !user.password) {
-            return res.status(401).json({ error: "Invalid email or password" });
+            return res.status(200).json({ success: false, error: "Invalid email or password" });
         }
 
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
-            return res.status(401).json({ error: "Invalid email or password" });
+            return res.status(200).json({ success: false, error: "Invalid email or password" });
         }
 
         const preAuthToken = jwt.sign(
@@ -468,7 +463,7 @@ export const verifyLoginCredentials = async (req, res) => {
 
     } catch (error) {
         console.error("Credential Verification Error:", error);
-        return res.status(500).json({ error: "Internal server error" });
+        return res.status(500).json({ success: false, error: "Internal server error" });
     }
 };
 
@@ -476,48 +471,48 @@ export const requestEmailOTP = async (req, res) => {
     try {
         const { email, adminLogin, recaptchaToken, mode, preAuthToken, password } = req.body;
 
-        if (!email) return res.status(400).json({ error: "Email address is required" });
+        if (!email) return res.status(200).json({ success: false, error: "Email address is required" });
         const normalizedEmail = String(email).trim().toLowerCase();
 
         let user = null;
 
         if (mode === 'login') {
-            if (!preAuthToken) return res.status(401).json({ error: "Authentication session missing. Please log in again." });
+            if (!preAuthToken) return res.status(200).json({ success: false, error: "Authentication session missing. Please log in again." });
 
             try {
                 const decoded = jwt.verify(preAuthToken, process.env.JWT_SECRET);
                 if (decoded.email !== normalizedEmail || !decoded.isPreAuthenticated) {
-                     return res.status(401).json({ error: "Invalid authentication session" });
+                     return res.status(200).json({ success: false, error: "Invalid authentication session" });
                 }
             } catch (err) {
-                return res.status(401).json({ error: "Authentication session expired. Please log in again." });
+                return res.status(200).json({ success: false, error: "Authentication session expired. Please log in again." });
             }
 
             user = await User.findOne({ email: normalizedEmail }).select("firstName lastName role");
-            if (!user) return res.status(404).json({ error: "User not found" });
+            if (!user) return res.status(200).json({ success: false, error: "User not found" });
 
         } else if (mode === 'forgot') {
             user = await User.findOne({ email: normalizedEmail }).select("firstName lastName role");
-            if (!user) return res.status(404).json({ error: "No account found with this email" });
+            if (!user) return res.status(200).json({ success: false, error: "No account found with this email" });
             
         } else if (mode === 'register') {
             const existingUser = await User.findOne({ email: normalizedEmail });
-            if (existingUser) return res.status(400).json({ error: "An account with this email already exists" });
+            if (existingUser) return res.status(200).json({ success: false, error: "An account with this email already exists" });
             
-            if (!password) return res.status(400).json({ error: "Password is required for registration" });
+            if (!password) return res.status(200).json({ success: false, error: "Password is required for registration" });
             
             await redisClient.setEx(`pending:pwd:${normalizedEmail}`, 300, password);
         }
 
         if (user && adminLogin && user.role !== 'Admin') {
-            return res.status(403).json({ error: 'Invalid admin credentials' });
+            return res.status(200).json({ success: false, error: 'Invalid admin credentials' });
         }
 
         if (!adminLogin) await validateRecaptcha(recaptchaToken);
 
         const cooldownKey = `cooldown:email:${normalizedEmail}`;
         if (await redisClient.get(cooldownKey)) {
-            return res.status(429).json({ error: "Please wait 60 seconds." });
+            return res.status(200).json({ success: false, error: "Please wait 60 seconds." });
         }
 
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -537,7 +532,7 @@ export const requestEmailOTP = async (req, res) => {
 
     } catch (error) {
         console.error("Email OTP Error:", error);
-        return res.status(500).json({ error: "Internal server error" });
+        return res.status(500).json({ success: false, error: "Internal server error" });
     }
 };
 
@@ -545,7 +540,7 @@ export const verifyEmailOTP = async (req, res) => {
     try {
         const { email, phone, identifierType, otp, adminLogin, mode } = req.body;
 
-        if (!otp) return res.status(400).json({ error: "OTP code is required." });
+        if (!otp) return res.status(200).json({ success: false, error: "OTP code is required." });
 
         const normalizedEmail = email ? String(email).trim().toLowerCase() : '';
         const normalizedPhone = phone ? String(phone).trim() : '';
@@ -554,19 +549,19 @@ export const verifyEmailOTP = async (req, res) => {
         let user = null;
 
         if (identifierType === 'phone') {
-            if (!normalizedPhone) return res.status(400).json({ error: 'Phone is required.' });
+            if (!normalizedPhone) return res.status(200).json({ success: false, error: 'Phone is required.' });
             user = await User.findOne({ phone: normalizedPhone });
             if (user) lookupEmail = user.email;
-            else return res.status(404).json({ error: 'Phone number not found.' }); 
+            else return res.status(200).json({ success: false, error: 'Phone number not found.' }); 
         }
 
-        if (!lookupEmail) return res.status(400).json({ error: 'Email is required for OTP validation.' });
+        if (!lookupEmail) return res.status(200).json({ success: false, error: 'Email is required for OTP validation.' });
 
         const cacheKey = `otp:email:${lookupEmail}`;
         const cachedOtp = await redisClient.get(cacheKey);
 
-        if (!cachedOtp) return res.status(400).json({ error: "Your verification code has expired or was never requested." });
-        if (cachedOtp !== String(otp).trim()) return res.status(400).json({ error: "Incorrect OTP entered." });
+        if (!cachedOtp) return res.status(200).json({ success: false, error: "Your verification code has expired or was never requested." });
+        if (cachedOtp !== String(otp).trim()) return res.status(200).json({ success: false, error: "Incorrect OTP entered." });
 
         await redisClient.del(cacheKey);
 
@@ -574,13 +569,13 @@ export const verifyEmailOTP = async (req, res) => {
 
         if (!user) {
             if (adminLogin || mode === 'login') {
-                return res.status(404).json({ error: 'Account does not exist. Please register first.' });
+                return res.status(200).json({ success: false, error: 'Account does not exist. Please register first.' });
             }
 
             if (mode === 'register') {
                 const rawPassword = await redisClient.get(`pending:pwd:${lookupEmail}`);
                 if (!rawPassword) {
-                    return res.status(400).json({ error: "Registration session expired. Please start over." });
+                    return res.status(200).json({ success: false, error: "Registration session expired. Please start over." });
                 }
 
                 const hashedPassword = await bcrypt.hash(rawPassword, 10);
@@ -615,13 +610,13 @@ export const verifyEmailOTP = async (req, res) => {
             }
         }
 
-        if (adminLogin && user.role !== 'Admin') return res.status(403).json({ error: 'Invalid admin user' });
+        if (adminLogin && user.role !== 'Admin') return res.status(200).json({ success: false, error: 'Invalid admin user' });
 
         return await processUserSession(user, req, res, "Welcome back! Login successful.");
 
     } catch (error) {
         console.error("Email Verification Endpoint Error:", error);
-        return res.status(500).json({ error: error.message || "Internal profile session integration crash" });
+        return res.status(500).json({ success: false, error: error.message || "Internal profile session integration crash" });
     }
 };
 
@@ -630,14 +625,14 @@ export const completeRegistration = async (req, res) => {
         const { firstName, lastName, phone, registrationToken } = req.body;
 
         if (!firstName || !registrationToken) {
-            return res.status(400).json({ error: "First name and registration token are required." });
+            return res.status(200).json({ success: false, error: "First name and registration token are required." });
         }
 
         let decoded;
         try {
             decoded = jwt.verify(registrationToken, process.env.JWT_SECRET);
         } catch (err) {
-            return res.status(400).json({ error: "Registration session expired. Please verify your email again." });
+            return res.status(200).json({ success: false, error: "Registration session expired. Please verify your email again." });
         }
 
         const userId = decoded.userId;
@@ -654,7 +649,7 @@ export const completeRegistration = async (req, res) => {
         if (normalizedPhone) {
             const phoneExists = await User.exists({ phone: normalizedPhone, _id: { $ne: userId } });
             if (phoneExists) {
-                return res.status(400).json({ error: "This phone number is already associated with another account." });
+                return res.status(200).json({ success: false, error: "This phone number is already associated with another account." });
             }
             updateData.phone = normalizedPhone;
         }
@@ -666,14 +661,14 @@ export const completeRegistration = async (req, res) => {
         );
 
         if (!updatedUser) {
-            return res.status(404).json({ error: "User account could not be found to complete setup." });
+            return res.status(200).json({ success: false, error: "User account could not be found to complete setup." });
         }
 
         return await processUserSession(updatedUser, req, res, "Account successfully provisioned! Welcome to the platform.");
 
     } catch (error) {
         console.error("Complete Registration Error:", error);
-        return res.status(500).json({ error: "Internal profile configuration creation failure." });
+        return res.status(500).json({ success: false, error: "Internal profile configuration creation failure." });
     }
 };
 
@@ -682,7 +677,7 @@ export const resetPassword = async (req, res) => {
         const { email, otp, password } = req.body;
 
         if (!email || !otp || !password) {
-            return res.status(400).json({ error: 'Email, OTP and new password are required.' });
+            return res.status(200).json({ success: false, error: 'Email, OTP and new password are required.' });
         }
 
         const normalizedEmail = String(email).trim().toLowerCase();
@@ -690,16 +685,16 @@ export const resetPassword = async (req, res) => {
         const cachedOtp = await redisClient.get(cacheKey);
 
         if (!cachedOtp) {
-            return res.status(400).json({ error: 'OTP expired or not requested. Please request a new code.' });
+            return res.status(200).json({ success: false, error: 'OTP expired or not requested. Please request a new code.' });
         }
 
         if (String(cachedOtp).trim() !== String(otp).trim()) {
-            return res.status(400).json({ error: 'Invalid OTP code.' });
+            return res.status(200).json({ success: false, error: 'Invalid OTP code.' });
         }
 
         const user = await User.findOne({ email: normalizedEmail });
         if (!user) {
-            return res.status(404).json({ error: 'No account exists for that email address.' });
+            return res.status(200).json({ success: false, error: 'No account exists for that email address.' });
         }
 
         await redisClient.del(cacheKey);
@@ -710,7 +705,7 @@ export const resetPassword = async (req, res) => {
         return await processUserSession(user, req, res, 'Password reset successful.');
     } catch (error) {
         console.error('Password Reset Error:', error);
-        return res.status(500).json({ error: 'Internal server error during password reset.' });
+        return res.status(500).json({ success: false, error: 'Internal server error during password reset.' });
     }
 };
 
@@ -720,7 +715,7 @@ export const updateUser = async (req, res) => {
         const { firstName, lastName, phone } = req.body; 
 
         const user = await User.findOne({ id });
-        if (!user) return res.status(404).json({ error: "User not found" });
+        if (!user) return res.status(200).json({ success: false, error: "User not found" });
 
         if (firstName !== undefined) user.firstName = String(firstName).trim();
         if (lastName !== undefined) user.lastName = String(lastName).trim();
@@ -730,7 +725,7 @@ export const updateUser = async (req, res) => {
             if (newPhone !== user.phone) {
                 const phoneExists = await User.findOne({ phone: newPhone, id: { $ne: id } });
                 if (phoneExists) {
-                    return res.status(400).json({ error: "This phone number is already registered to another account." });
+                    return res.status(200).json({ success: false, error: "This phone number is already registered to another account." });
                 }
                 user.phone = newPhone;
             }
@@ -742,21 +737,21 @@ export const updateUser = async (req, res) => {
 
         const userData = user.toObject();
         delete userData.password; 
-        return res.status(200).json({ success: "User profile updated successfully", user: userData });
+        return res.status(200).json({ success: true, message: "User profile updated successfully", user: userData });
     } catch (error) {
         console.error("Update User Error:", error);
-        return res.status(500).json({ error: error.message || "Internal Server Error" });
+        return res.status(500).json({ success: false, error: error.message || "Internal Server Error" });
     }
 };
 
 export const addAddress = async (req, res) => {
     try {
         const { userId, ...addressData } = req.body;
-        if (!userId) return res.status(401).json({ error: "Please login again to continue" });
+        if (!userId) return res.status(200).json({ success: false, error: "Please login again to continue" });
 
         const user = await User.findOne({ id: userId });
-        if (!user) return res.status(404).json({ error: "User not found" });
-        if (user.addresses.length >= 5) return res.status(400).json({ error: "Can't add more than 5 addresses" });
+        if (!user) return res.status(200).json({ success: false, error: "User not found" });
+        if (user.addresses.length >= 5) return res.status(200).json({ success: false, error: "Can't add more than 5 addresses" });
 
         if (user.addresses.length === 0) {
             addressData.isDefault = true;
@@ -775,25 +770,25 @@ export const addAddress = async (req, res) => {
 
         return res.status(201).json({ success: true, message: "Address added successfully", newAddress });
     } catch (error) {
-        if (error.name === 'ValidationError') return res.status(400).json({ error: "Validation Failed", details: error.message });
-        return res.status(500).json({ error: "Internal Server Error" });
+        if (error.name === 'ValidationError') return res.status(200).json({ success: false, error: "Validation Failed", details: error.message });
+        return res.status(500).json({ success: false, error: "Internal Server Error" });
     }
 };
 
 export const updateAddress = async (req, res) => {
     try {
         const { _id, userId, ...updatedAddressData } = req.body;
-        if (!userId) return res.status(401).json({ error: "Please login again" });
+        if (!userId) return res.status(200).json({ success: false, error: "Please login again" });
 
         const currentUser = await User.findOne({ id: userId });
-        if (!currentUser) return res.status(404).json({ error: "User not found" });
+        if (!currentUser) return res.status(200).json({ success: false, error: "User not found" });
 
         const targetAddress = currentUser.addresses.id(_id);
-        if (!targetAddress) return res.status(404).json({ error: "Address not found" });
+        if (!targetAddress) return res.status(200).json({ success: false, error: "Address not found" });
 
         if (updatedAddressData.isDefault === false && targetAddress.isDefault === true) {
             const otherDefaults = currentUser.addresses.filter(addr => addr._id.toString() !== _id && addr.isDefault === true);
-            if (otherDefaults.length === 0) return res.status(400).json({ error: "At least one address must be set as default." });
+            if (otherDefaults.length === 0) return res.status(200).json({ success: false, error: "At least one address must be set as default." });
         }
 
         if (updatedAddressData.isDefault === true) {
@@ -813,33 +808,33 @@ export const updateAddress = async (req, res) => {
         
         await syncUserCacheAndSession(user, req);
 
-        return res.status(200).json({ success: "Address updated successfully", updatedAddress: user.addresses.id(_id) });
+        return res.status(200).json({ success: true, message: "Address updated successfully", updatedAddress: user.addresses.id(_id) });
     } catch (error) {
-        return res.status(500).json({ error: "Internal Server Error" });
+        return res.status(500).json({ success: false, error: "Internal Server Error" });
     }
 };
 
 export const deleteAddress = async (req, res) => {
     try {
         const { id, addressId } = req.params;
-        if (!id || !addressId) return res.status(400).json({ error: "Missing identification" });
+        if (!id || !addressId) return res.status(200).json({ success: false, error: "Missing identification" });
 
         const user = await User.findOne({ id });
-        if (!user) return res.status(404).json({ error: "User not found" });
+        if (!user) return res.status(200).json({ success: false, error: "User not found" });
 
         const addressToDelete = user.addresses.id(addressId);
-        if (!addressToDelete) return res.status(404).json({ error: "Address not found" });
+        if (!addressToDelete) return res.status(200).json({ success: false, error: "Address not found" });
 
-        if (addressToDelete.isDefault) return res.status(400).json({ error: "You cannot delete your primary address." });
+        if (addressToDelete.isDefault) return res.status(200).json({ success: false, error: "You cannot delete your primary address." });
 
         user.addresses.pull(addressId);
         await user.save();
 
         await syncUserCacheAndSession(user, req);
 
-        return res.status(200).json({ success: "Address deleted successfully", deletedAddress: addressId });
+        return res.status(200).json({ success: true, message: "Address deleted successfully", deletedAddress: addressId });
     } catch (error) {
-        return res.status(500).json({ error: "Internal Server Error" });
+        return res.status(500).json({ success: false, error: "Internal Server Error" });
     }
 };
 
@@ -860,7 +855,7 @@ export const getAllUsersAdmin = async (req, res) => {
         const users = await User.find(query).select("-password -__v").sort({ [field]: direction }).lean();
         return res.status(200).json({ success: true, users });
     } catch (error) {
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ success: false, error: error.message });
     }
 };
 
@@ -868,7 +863,7 @@ export const getUserAdmin = async (req, res) => {
     try {
         const { id } = req.params;
         const user = await User.findOne({ id: id }).select("-password -__v").lean();
-        if (!user) return res.status(404).json({ error: "User not found" });
+        if (!user) return res.status(200).json({ success: false, error: "User not found" });
 
         const orders = await Order.find({ id }).sort({ createdAt: -1 }).lean();
         const cartItems = Array.isArray(user.cart) ? user.cart : [];
@@ -882,7 +877,7 @@ export const getUserAdmin = async (req, res) => {
         }));
         return res.status(200).json({ success: true, user, orders, cart });
     } catch (error) {
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ success: false, error: error.message });
     }
 };
 
@@ -903,10 +898,10 @@ export const updateUserAdmin = async (req, res) => {
             { returnDocument: 'after' }
         ).select("-password -__v").lean();
 
-        if (!user) return res.status(404).json({ error: "User not found" });
+        if (!user) return res.status(200).json({ success: false, error: "User not found" });
         return res.status(200).json({ success: true, user });
     } catch (error) {
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ success: false, error: error.message });
     }
 };
 
@@ -919,7 +914,7 @@ export const deleteUserAdmin = async (req, res) => {
             { returnDocument: 'after' }
         );
 
-        if (!deletedUser) return res.status(404).json({ error: "User not found" });
+        if (!deletedUser) return res.status(200).json({ success: false, error: "User not found" });
 
         const tokens = await redisClient.sMembers(`user_sessions:${userId}`);
         
@@ -937,14 +932,14 @@ export const deleteUserAdmin = async (req, res) => {
         return res.status(200).json({ success: true, message: "User deleted successfully" });
     } catch (error) {
         console.error("Error deleting admin user:", error);
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ success: false, error: error.message });
     }
 };
 
 export const getAddresses = async (req, res) => {
     try {
         const { id } = req.params;
-        if (!id) return res.status(401).json({ error: "Please login to continue" });
+        if (!id) return res.status(200).json({ success: false, error: "Please login to continue" });
 
         const cacheKey = `user:addresses:${id}`;
         const cachedAddresses = await redisClient.get(cacheKey);
@@ -952,12 +947,12 @@ export const getAddresses = async (req, res) => {
         if (cachedAddresses) return res.status(200).json({ success: true, addresses: JSON.parse(cachedAddresses) });
 
         const user = await User.findOne({ id });
-        if (!user) return res.status(404).json({ error: "User not found" });
+        if (!user) return res.status(200).json({ success: false, error: "User not found" });
 
         await redisClient.setEx(cacheKey, 3600, JSON.stringify(user.addresses));
         return res.status(200).json({ success: true, addresses: user.addresses });
     } catch (error) {
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ success: false, error: error.message });
     }
 };
 
@@ -966,10 +961,34 @@ export const getMe = async (req, res) => {
         if (req.user) {
             return res.status(200).json({ success: true, user: req.user });
         }
-        return res.status(200).json({ alert: "User not found" });
+        return res.status(200).json({ success: false, alert: "User not found" });
     } catch (error) {
         console.error('[server][getMe] error:', error);
-        return res.status(500).json({ message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+export const getAdminMe = async (req, res) => {
+    try {
+        // 1. Check if user is logged in at all
+        if (!req.user) {
+            return res.status(200).json({ success: false, error: "Not authenticated." });
+        }
+
+        // 2. Explicitly check for Admin role
+        if (req.user.role !== 'Admin') {
+            return res.status(200).json({ 
+                success: false, 
+                error: "Access denied. Administrator privileges required." 
+            });
+        }
+
+        // 3. Success: Return the admin user data
+        return res.status(200).json({ success: true, user: req.user });
+
+    } catch (error) {
+        return res.status(500).json({ success: false, error: error.message || "Internal server error." });
     }
 };
 
@@ -1020,6 +1039,6 @@ export const logoutUser = async (req, res) => {
         return res.status(200).json({ success: true, message: 'Logged out', deletedKeysCount: deletedCount });
     } catch (error) {
         console.error('[logout] Error in logoutUser:', error?.message || error);
-        return res.status(500).json({ error: 'Failed to logout' });
+        return res.status(500).json({ success: false, error: 'Failed to logout' });
     }
 };

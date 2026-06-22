@@ -63,7 +63,7 @@ export const deleteSubscriber = async (req, res) => {
     const email = String(req.body?.email || req.query?.email || '').trim().toLowerCase();
     if (!email) return res.status(400).json({ success: false, error: 'email required' });
     const removed = await Subscriber.findOneAndDelete({ email });
-    if (!removed) return res.status(404).json({ success: false, error: 'not found' });
+    if (!removed) return res.status(200).json({ success: false, error: 'not found' });
     return res.status(200).json({ success: true, deleted: removed });
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message });
@@ -75,7 +75,7 @@ export const adminDeleteSubscriber = async (req, res) => {
     const id = req.params.id;
     if (!id) return res.status(400).json({ success: false, error: 'id required' });
     const removed = await Subscriber.findByIdAndDelete(id);
-    if (!removed) return res.status(404).json({ success: false, error: 'not found' });
+    if (!removed) return res.status(200).json({ success: false, error: 'not found' });
     return res.status(200).json({ success: true, deleted: removed });
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message });

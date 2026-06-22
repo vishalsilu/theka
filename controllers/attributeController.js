@@ -60,7 +60,7 @@ export const updateAttribute = async (req, res) => {
 
     // We use findByIdAndUpdate, but we need the original document's 'key' to invalidate the right cache
     const updated = await Attribute.findByIdAndUpdate(id, { name }, { new: true });
-    if (!updated) return res.status(404).json({ error: 'Not found' });
+    if (!updated) return res.status(200).json({ error: 'Not found' });
 
     // Invalidate Cache for this attribute group (e.g., 'attributes:color')
     await redisClient.del(getCacheKey(updated.key));
@@ -78,7 +78,7 @@ export const deleteAttribute = async (req, res) => {
     
     // We need the document before deletion to find out which 'key' group it belonged to
     const deleted = await Attribute.findByIdAndDelete(id);
-    if (!deleted) return res.status(404).json({ error: 'Not found' });
+    if (!deleted) return res.status(200).json({ error: 'Not found' });
 
     // Invalidate Cache for this specific group
     await redisClient.del(getCacheKey(deleted.key));

@@ -73,12 +73,12 @@ export const protect = async (req, res, next) => {
     const parsedToken = req.cookies?.token;
 
     if (!token) {
-        return res.status(200).json({ alert: 'Not authorized, no session cookie found' });
+        return res.status(200).json({ success: false, user: null });
     }
 
     const user = await resolveUserFromToken(token, req);
     if (!user) {
-        return res.status(200).json({ alert: 'Not authorized, session invalid or expired' });
+        return res.status(200).json({ success: false, user: null });
     }
 
     req.user = user;

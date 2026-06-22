@@ -89,7 +89,7 @@ export const getCouponsAdmin = async (_req, res) => {
 export const getCouponByIdAdmin = async (req, res) => {
   try {
     const coupon = await Coupon.findById(req.params.id).lean();
-    if (!coupon) return res.status(404).json({ error: "Coupon not found" });
+    if (!coupon) return res.status(200).json({ error: "Coupon not found" });
     return res.status(200).json({ success: true, coupon });
   } catch (error) {
     return res.status(500).json({ error: error.message || "Failed to fetch coupon" });
@@ -101,7 +101,7 @@ export const updateCouponAdmin = async (req, res) => {
     const patch = { ...req.body };
     if (patch.code) patch.code = String(patch.code).toUpperCase().trim();
     const coupon = await Coupon.findByIdAndUpdate(req.params.id, patch, { new: true, runValidators: true });
-    if (!coupon) return res.status(404).json({ error: "Coupon not found" });
+    if (!coupon) return res.status(200).json({ error: "Coupon not found" });
     return res.status(200).json({ success: true, coupon });
   } catch (error) {
     return res.status(500).json({ error: error.message || "Failed to update coupon" });
@@ -111,7 +111,7 @@ export const updateCouponAdmin = async (req, res) => {
 export const deleteCouponAdmin = async (req, res) => {
   try {
     const deleted = await Coupon.findByIdAndDelete(req.params.id);
-    if (!deleted) return res.status(404).json({ error: "Coupon not found" });
+    if (!deleted) return res.status(200).json({ error: "Coupon not found" });
     return res.status(200).json({ success: true});
   } catch (error) {
     return res.status(500).json({ error: error.message || "Failed to delete coupon" });

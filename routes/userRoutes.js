@@ -17,7 +17,8 @@ import {
     updateUserAdmin,
     deleteUserAdmin,
     handleContactUsRequest,
-    verifyLoginCredentials
+    verifyLoginCredentials,
+    getAdminMe
 } from "../controllers/userController.js"
 import { protect } from "../middleware/authMiddleware.js";
 import { adminOnly } from "../middleware/adminMiddleware.js";
@@ -43,6 +44,7 @@ routes.post('/logout', logoutUser);
 
 routes.patch('/update-profile', protect, updateUser);
 routes.get('/me', protect, getMe);
+routes.get('/admin/me',adminOnly, protect, getAdminMe);
 routes.get('/all', protect, adminOnly, getAllUsersAdmin);
 routes.get('/:id', protect, adminOnly, getUserAdmin);
 

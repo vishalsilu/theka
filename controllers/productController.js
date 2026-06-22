@@ -615,7 +615,7 @@ export const setProductSponsorship = async (req, res) => {
         if (mongoose.Types.ObjectId.isValid(id)) query.push({ _id: id });
 
         const product = await Product.findOneAndUpdate({ $or: query }, { $set: update }, { new: true }).lean();
-        if (!product) return res.status(404).json({ error: 'Product not found' });
+        if (!product) return res.status(200).json({ error: 'Product not found' });
 
         await safeRedisDel(`product:detail:${product._id}`, `product:detail:${product.id}`);
         await invalidateProductCache({
@@ -638,14 +638,14 @@ export const removeReview = async (req, res) => {
   try {
     const { orderId, productId, userId, id } = req.body; 
 
-    if (!userId) return res.status(401).json({ error: "Not authorized" });
+    if (!userId) return res.status(200).json({ error: "Not authorized" });
     if (!productId || !id) return res.status(400).json({ error: "Missing required fields" });
 
     const productDoc = await Product.findOne({ id: productId }).lean();
-    if (!productDoc) return res.status(404).json({ error: "Product not found" });
+    if (!productDoc) return res.status(200).json({ error: "Product not found" });
 
     const reviewToDelete = productDoc.reviews?.find((review) => String(review._id) === String(id) && String(review.userId) === String(userId));
-    if (!reviewToDelete) return res.status(404).json({ error: "Review not found or not authorized to delete" });
+    if (!reviewToDelete) return res.status(200).json({ error: "Review not found or not authorized to delete" });
 
     const reviewImages = Array.isArray(reviewToDelete.images) ? reviewToDelete.images : [];
 
@@ -655,7 +655,7 @@ export const removeReview = async (req, res) => {
       { new: true }
     ).lean();
 
-    if (!productUpdate) return res.status(404).json({ error: "Product not found or review already removed" });
+    if (!productUpdate) return res.status(200).json({ error: "Product not found or review already removed" });
 
     await Promise.allSettled(reviewImages.map(deleteFromCloudinary));
 
@@ -712,7 +712,7 @@ export const removeReviewAdmin = async (req, res) => {
     if (!id) return res.status(400).json({ error: "Missing review ID" });
 
     const targetProduct = await Product.findOne({ "reviews._id": id });
-    if (!targetProduct) return res.status(404).json({ error: "Review not found or already removed from product" });
+    if (!targetProduct) return res.status(200).json({ error: "Review not found or already removed from product" });
 
     const productId = targetProduct._id; 
     const customProductId = targetProduct.id;
@@ -775,14 +775,14 @@ export const removeReviewAdmin = async (req, res) => {
 // --- ADD PRODUCT REVIEW ---
 export const addProductReview = async (req, res) => {
   try {
-    if (!req.user) return res.status(401).json({ error: "Login required to submit a review." });
+    if (!req.user) return res.status(200).json({ error: "Login required to submit a review." });
 
     const { id } = req.params;
     const query = [{ id }];
     if (mongoose.Types.ObjectId.isValid(id)) query.push({ _id: id });
     
     const product = await Product.findOne({ $or: query });
-    if (!product) return res.status(404).json({ error: "Product not found" });
+    if (!product) return res.status(200).json({ error: "Product not found" });
 
     const rating = Number(req.body.rating || req.body.rate || 0);
     const title = String(req.body.title || '').trim();
@@ -830,17 +830,17 @@ export const addProductReview = async (req, res) => {
 // --- UPDATE PRODUCT REVIEW ---
 export const updateProductReview = async (req, res) => {
   try {
-    if (!req.user) return res.status(401).json({ error: "Login required to update a review." });
+    if (!req.user) return res.status(200).json({ error: "Login required to update a review." });
 
     const { id, reviewId } = req.params;
     const query = [{ id }];
     if (mongoose.Types.ObjectId.isValid(id)) query.push({ _id: id });
 
     const product = await Product.findOne({ $or: query });
-    if (!product) return res.status(404).json({ error: "Product not found" });
+    if (!product) return res.status(200).json({ error: "Product not found" });
 
     const review = product.reviews?.find((rev) => String(rev._id) === String(reviewId));
-    if (!review) return res.status(404).json({ error: "Review not found" });
+    if (!review) return res.status(200).json({ error: "Review not found" });
 
     if (String(review.userId) !== String(req.user.id) && req.user.role !== 'Admin') {
       return res.status(403).json({ error: "Not authorized to update this review." });
@@ -927,7 +927,7 @@ export const getSpecificProduct = async (req, res) => {
             .populate('categoryInfo.id')
             .populate('collectionInfo.id');
 
-        if (!product) return res.status(404).json({ message: "Product not found or is currently drafted" });
+        if (!product) return res.status(200).json({ message: "Product not found or is currently drafted" });
 
         await redisClient.setEx(cacheKey, 3600, JSON.stringify(product));
         res.status(200).json({ success: true, data: product });
@@ -943,7 +943,7 @@ export const updateProduct = async (req, res) => {
         let updateData = { ...req.body };
         
         const product = await Product.findOne({ id: id });
-        if (!product) return res.status(404).json({ message: "Product not found" });
+        if (!product) return res.status(200).json({ message: "Product not found" });
 
         const fieldsToParse = ['variants', 'discount', 'collectionInfo', 'categoryInfo', 'timeline'];
         fieldsToParse.forEach(field => {
@@ -1048,7 +1048,7 @@ export const deleteProduct = async (req, res) => {
         const { id } = req.params;
         const deletedProduct = await Product.findOneAndDelete({ id: id });
 
-        if (!deletedProduct) return res.status(404).json({ message: "Product not found" });
+        if (!deletedProduct) return res.status(200).json({ message: "Product not found" });
 
         try {
             const imgs = Array.isArray(deletedProduct.variants) ? deletedProduct.variants.flatMap(v => (v.images || [])) : [];
@@ -1172,7 +1172,7 @@ export const toggleProductStatus = async (req, res) => {
 
         const product = await Product.findOne({ $or: query });
 
-        if (!product) return res.status(404).json({ message: "Product not found" });
+        if (!product) return res.status(200).json({ message: "Product not found" });
 
         // 1. Update the status
         product.status = product.status === 'ACTIVE' ? 'DRAFT' : 'ACTIVE';

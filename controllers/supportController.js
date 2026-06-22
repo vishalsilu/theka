@@ -43,7 +43,7 @@ export const getSupportTicketAdmin = async (req, res) => {
     const ticket = await SupportTicket.findOne({ ticketId }).lean();
 
     if (!ticket) {
-      return res.status(404).json({ success: false, error: 'Support ticket not found' });
+      return res.status(200).json({ success: false, error: 'Support ticket not found' });
     }
 
     return res.status(200).json({ success: true, ticket });
@@ -64,7 +64,7 @@ export const updateSupportTicketStatusAdmin = async (req, res) => {
 
     const ticket = await SupportTicket.findOne({ ticketId });
     if (!ticket) {
-      return res.status(404).json({ success: false, error: 'Support ticket not found' });
+      return res.status(200).json({ success: false, error: 'Support ticket not found' });
     }
 
     ticket.status = status;
@@ -89,7 +89,7 @@ export const replySupportTicketAdmin = async (req, res) => {
 
     const ticket = await SupportTicket.findOne({ ticketId });
     if (!ticket) {
-      return res.status(404).json({ success: false, error: 'Support ticket not found' });
+      return res.status(200).json({ success: false, error: 'Support ticket not found' });
     }
 
     const replyPayload = {
@@ -217,7 +217,7 @@ export const getSupportTicketUser = async (req, res) => {
     const ticket = await SupportTicket.findOne({ ticketId, userId: req.user.id }).lean();
 
     if (!ticket) {
-      return res.status(404).json({ success: false, error: 'Ticket not found' });
+      return res.status(200).json({ success: false, error: 'Ticket not found' });
     }
 
     return res.status(200).json({ success: true, ticket });
@@ -239,7 +239,7 @@ export const replySupportTicketUser = async (req, res) => {
     // Find ticket and verify ownership
     const ticket = await SupportTicket.findOne({ ticketId, userId: req.user.id });
     if (!ticket) {
-      return res.status(404).json({ success: false, error: 'Support ticket not found' });
+      return res.status(200).json({ success: false, error: 'Support ticket not found' });
     }
 
     // Prevent replies if the ticket is closed

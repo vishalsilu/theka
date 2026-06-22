@@ -8,7 +8,7 @@ import crypto from "crypto";
 export const initiateRazorpayOrder = async (req, res) => {
   try {
     const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ error: "Not authorized" });
+    if (!userId) return res.status(200).json({ error: "Not authorized" });
 
     const { orderId, amount, currency = "INR" } = req.body;
 
@@ -18,7 +18,7 @@ export const initiateRazorpayOrder = async (req, res) => {
 
     // Verify order exists and belongs to user
     const order = await Order.findOne({ orderId }).lean();
-    if (!order) return res.status(404).json({ error: "Order not found" });
+    if (!order) return res.status(200).json({ error: "Order not found" });
     if (order.userId !== userId && req.user?.role !== "Admin") {
       return res.status(403).json({ error: "Forbidden" });
     }
@@ -63,7 +63,7 @@ export const initiateRazorpayOrder = async (req, res) => {
 export const verifyPayment = async (req, res) => {
   try {
     const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ error: "Not authorized" });
+    if (!userId) return res.status(200).json({ error: "Not authorized" });
 
     const {
       razorpayOrderId,
@@ -88,7 +88,7 @@ export const verifyPayment = async (req, res) => {
 
     // Fetch order
     const order = await Order.findOne({ orderId });
-    if (!order) return res.status(404).json({ error: "Order not found" });
+    if (!order) return res.status(200).json({ error: "Order not found" });
     if (order.userId !== userId && req.user?.role !== "Admin") {
       return res.status(403).json({ error: "Forbidden" });
     }
@@ -227,7 +227,7 @@ export const handlePaymentFailure = async (req, res) => {
     }
 
     const order = await Order.findOne({ orderId });
-    if (!order) return res.status(404).json({ error: "Order not found" });
+    if (!order) return res.status(200).json({ error: "Order not found" });
     if (order.userId !== userId && req.user?.role !== "Admin") {
       return res.status(403).json({ error: "Forbidden" });
     }
