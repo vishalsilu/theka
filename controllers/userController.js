@@ -93,7 +93,7 @@ const syncUserCacheAndSession = async (user, req) => {
     }
 };
 
-async function processUserSession(user, req, res, messageSuccess) {
+async function processUserSession(user, req, res, messageSuccess, isAdmin = false) {
     const userData = user.toObject();
     delete userData.password;
 
@@ -109,7 +109,6 @@ async function processUserSession(user, req, res, messageSuccess) {
     }
 
     const mergedCart = mergeThinCarts(userCartItems, guestItems);
-    
     await saveUserCart(user.id, mergedCart);
 
     if (guestToken && TOKEN_REGEX.test(guestToken)) {
@@ -144,7 +143,10 @@ async function processUserSession(user, req, res, messageSuccess) {
     ]);
 
     const cookieOptions = buildCookieOptions(req);
-    res.cookie('token', sessionToken, cookieOptions);
+    
+    // 🔥 Dynamically set the cookie name based on role
+    const cookieName = isAdmin ? 'admin_token' : 'token';
+    res.cookie(cookieName, sessionToken, cookieOptions);
     
     if (process.env.NODE_ENV !== 'production') {
         res.setHeader('X-Debug-Session-Token', sessionToken);
@@ -610,9 +612,13 @@ export const verifyEmailOTP = async (req, res) => {
             }
         }
 
-        if (adminLogin && user.role !== 'Admin') return res.status(200).json({ success: false, error: 'Invalid admin user' });
 
-        return await processUserSession(user, req, res, "Welcome back! Login successful.");
+        if (adminLogin && user.role !== 'Admin') {
+            return res.status(200).json({ success: false, error: 'Invalid admin user' });
+        }
+
+        return await processUserSession(user, req, res, "Welcome back! Login successful.", adminLogin);
+
 
     } catch (error) {
         console.error("Email Verification Endpoint Error:", error);

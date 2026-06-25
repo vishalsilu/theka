@@ -1,26 +1,35 @@
 import crypto from 'crypto';
-import jwt from 'jsonwebtoken';
-import User from '../models/Users.js';
-import { redisClient } from '../config/redis.js';
+import User from '../models/Users.js'; // Adjust path if needed
+import { redisClient } from '../config/redis.js'; // Adjust path if needed
 
 const extractTokenCookie = (req) => {
-    const cookieHeader = req.headers.cookie;
-    if (!cookieHeader || typeof cookieHeader !== 'string') {
-        return req.cookies?.token || null;
+
+    const isAdminRequest = Boolean(req.headers['x-admin-id']);
+    const targetCookieName = isAdminRequest ? 'admin_token' : 'token';
+
+    if (req.cookies && req.cookies[targetCookieName]) {
+        return req.cookies[targetCookieName];
     }
 
+    const cookieHeader = req.headers.cookie;
+    if (!cookieHeader || typeof cookieHeader !== 'string') {
+        return null;
+    }
+
+    const targetPrefix = `${targetCookieName}=`;
     const tokenValues = cookieHeader
         .split(';')
         .map((pair) => pair.trim())
-        .filter((pair) => pair.startsWith('token='))
-        .map((pair) => pair.slice('token='.length));
+        .filter((pair) => pair.startsWith(targetPrefix))
+        .map((pair) => pair.slice(targetPrefix.length));
 
     if (tokenValues.length > 1) {
-        console.log('[server][auth] duplicate token cookie values found:', tokenValues);
+        console.log(`[server][auth] duplicate ${targetCookieName} cookie values found:`, tokenValues);
     }
 
-    return tokenValues.length ? tokenValues[tokenValues.length - 1] : req.cookies?.token || null;
+    return tokenValues.length ? tokenValues[tokenValues.length - 1] : null;
 };
+
 
 const getAuthToken = (req) => {
     const authHeader = req.get('Authorization') || req.headers.authorization;
@@ -30,6 +39,7 @@ const getAuthToken = (req) => {
     return extractTokenCookie(req) || null;
 };
 
+
 const computeSessionFingerprint = (req) => {
     const userAgent = String(req.headers['user-agent'] || '').trim().slice(0, 512);
     const acceptLanguage = String(req.headers['accept-language'] || '').trim().slice(0, 128);
@@ -37,13 +47,13 @@ const computeSessionFingerprint = (req) => {
     return crypto.createHash('sha256').update(`${userAgent}|${acceptLanguage}|${origin}`).digest('hex');
 };
 
+
 export const resolveUserFromToken = async (token, req) => {
     const key = `session:${token.trim()}`;
     const cachedSession = await redisClient.get(key);
     
     if (!cachedSession) {
-        console.error(`Redis miss: Key ${key} not found.`);
-        return null;
+        return null; 
     }
     
     let sessionPayload;
@@ -56,10 +66,10 @@ export const resolveUserFromToken = async (token, req) => {
 
     const fingerprint = computeSessionFingerprint(req);
     if (!sessionPayload?.fingerprint || sessionPayload.fingerprint !== fingerprint) {
-        console.warn('[server][auth] session fingerprint mismatch', {
+        console.warn('[server][auth] session fingerprint mismatch. Potential session hijacking attempt.', {
             expected: sessionPayload?.fingerprint,
             actual: fingerprint,
-            token,
+            token: token.substring(0, 10) + '...' 
         });
         return null;
     }
@@ -67,20 +77,34 @@ export const resolveUserFromToken = async (token, req) => {
     return sessionPayload.user || null;
 };
 
-// Cleaned up middleware
+
 export const protect = async (req, res, next) => {
     const token = getAuthToken(req);
-    const parsedToken = req.cookies?.token;
 
     if (!token) {
-        return res.status(200).json({ success: false, user: null });
+        return res.status(200).json({ success: false, user: null, error: "Not authorized: No token provided" });
     }
 
     const user = await resolveUserFromToken(token, req);
+    
     if (!user) {
-        return res.status(200).json({ success: false, user: null });
+        return res.status(200).json({ success: false, user: null, error: "Not authorized: Invalid or expired session" });
     }
 
     req.user = user;
     next();
+};
+
+export const adminOnly = (req, res, next) => {
+  if (!req.user) {
+    return res.status(200).json({ success: false, error: "Not authorized: No user found" });
+  }
+
+  const userRole = String(req.user.role || '').toLowerCase();
+  
+  if (userRole !== "admin") {
+    return res.status(403).json({ success: false, error: "Forbidden: Admin access required" });
+  }
+
+  next();
 };
