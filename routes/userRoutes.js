@@ -44,7 +44,7 @@ routes.post('/logout', logoutUser);
 
 routes.patch('/update-profile', protect, updateUser);
 routes.get('/me', protect, getMe);
-routes.get('/admin/me',adminOnly, protect, getAdminMe);
+routes.get('/admin/me', protect,adminOnly, getAdminMe);
 routes.get('/all', protect, adminOnly, getAllUsersAdmin);
 routes.get('/:id', protect, adminOnly, getUserAdmin);
 

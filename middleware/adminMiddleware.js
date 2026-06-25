@@ -1,4 +1,7 @@
 export const adminOnly = (req, res, next) => {
+
+  
+
   // 1. Check if user exists
   if (!req.user) {
     return res.status(200).json({ success:false, error: "Not authorized: No user found" });
