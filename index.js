@@ -76,7 +76,7 @@ app.use(cors({
   credentials: true,
 
 
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-id', 'x-cart-token', 'Cookie', 'x-device-id'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-id', 'x-cart-token', 'Cookie'],
   exposedHeaders: ['Set-Cookie']
 }));
 
@@ -99,7 +99,7 @@ app.use('/admin/api/subscribers', subscriberRoutes);
 app.use('/api/invoices', invoiceRoutes)
 app.use('/admin/api/invoices', invoiceRoutes)
 app.use('/api/analytics', analyticsRoutes)
-app.use('/admin/api/analytics', analyticsRoutes)
+app.use('/api/admin/analytics', analyticsRoutes)
 app.use('/api/support', supportRoutes)
 app.use('/admin/api/support', supportRoutes)
 

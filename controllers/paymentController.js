@@ -172,7 +172,7 @@ export const razorpayWebhook = async (req, res) => {
           await redisClient.del(`order:detail:${orderId}`).catch(() => {});
           await redisClient.del(`orders:user:${userId}`).catch(() => {});
 
-          console.log(`✅ Payment confirmed for order: ${orderId}`);
+          // console.log(`✅ Payment confirmed for order: ${orderId}`);
         }
       }
     } else if (event === "payment.failed") {
@@ -194,7 +194,7 @@ export const razorpayWebhook = async (req, res) => {
             }
           );
 
-          console.log(`❌ Payment failed for order: ${orderId}`);
+          // console.log(`❌ Payment failed for order: ${orderId}`);
         }
       }
     } else if (event === "payment.authorized") {
