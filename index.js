@@ -31,14 +31,14 @@ const port = process.env.PORT || 5000;
 const otpCache = new Map();
 
 const defaultOrigins = [
-  'http://localhost:5175', 
-  'http://localhost:5174', 
+  'http://localhost:5175',
+  'http://localhost:5174',
   'http://localhost:3001',
   'http://172.20.10.13:5173',
   'http://172.28.56.116:5173',
   'http://172.20.10.13:5174',
   'http://172.28.56.116:5174',
-  
+
   'https://urbanroyalty.netlify.app',
   'https://adminurbanroyalty.netlify.app',
 ].filter(Boolean);
@@ -62,10 +62,10 @@ app.set('trust proxy', 1);
 app.use(cors({
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
-    
-    
-    const allowed = allowedOrigins.includes(origin) || 
-                    allowedOriginPatterns.some((pattern) => pattern.test(origin));
+
+
+    const allowed = allowedOrigins.includes(origin) ||
+      allowedOriginPatterns.some((pattern) => pattern.test(origin));
 
     if (allowed) {
       callback(null, true);
@@ -74,42 +74,19 @@ app.use(cors({
     }
   },
   credentials: true,
-  
-  
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-id', 'x-cart-token', 'Cookie'], 
+
+
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-id', 'x-cart-token', 'Cookie', 'x-device-id'],
   exposedHeaders: ['Set-Cookie']
 }));
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 app.use(express.json());
 
-
-
 app.use('/api/users', userRoutes);
-app.use('/api/cart',cartRoutes)
-app.use('/api/product',productRoutes)
-app.use('/api/category',categoryRoutes)
-app.use('/api/collections',collectionRoutes)
+app.use('/api/cart', cartRoutes)
+app.use('/api/product', productRoutes)
+app.use('/api/category', categoryRoutes)
+app.use('/api/collections', collectionRoutes)
 app.use('/api/orders', orderRoutes)
 app.use('/api/coupons', couponRoutes)
 app.use('/admin/api/coupons', couponRoutes)
@@ -128,9 +105,9 @@ app.use('/admin/api/support', supportRoutes)
 
 //Admin Routes
 app.use('/admin/api/orders', orderRoutes)
-app.use('/admin/api/product',productRoutes)
-app.use('/admin/api/collections',collectionRoutes)
-app.use('/admin/api/category',categoryRoutes)
+app.use('/admin/api/product', productRoutes)
+app.use('/admin/api/collections', collectionRoutes)
+app.use('/admin/api/category', categoryRoutes)
 app.use('/admin/api/users', adminUserRoutes)
 app.use('/api/attributes', attributeRoutes)
 app.use('/admin/api/attributes', attributeRoutes)
@@ -140,48 +117,48 @@ app.get('/', (req, res) => res.send('Urban API is running...'));
 
 
 app.use((err, req, res, next) => {
-    if (err && err.name === 'MulterError') {
-        return res.status(400).json({ error: err.message });
-    }
-    if (err) {
-        return res.status(500).json({ error: err.message || 'Unexpected server error' });
-    }
-    next();
+  if (err && err.name === 'MulterError') {
+    return res.status(400).json({ error: err.message });
+  }
+  if (err) {
+    return res.status(500).json({ error: err.message || 'Unexpected server error' });
+  }
+  next();
 });
 
 
 const startServer = async () => {
-    try {
-        await connectDB();
-        
-await connectRedis();
-        startCartSyncCron();
-        startNamePropagation();
+  try {
+    await connectDB();
 
-        app.listen(port, '0.0.0.0', () => {
-            console.log(`🚀 Server spinning on http://localhost:${port}`);
-        });
-    } catch (error) {
-        console.error("Critical System Failure:", error);
-        process.exit(1);
-    }
+    await connectRedis();
+    startCartSyncCron();
+    startNamePropagation();
+
+    app.listen(port, '0.0.0.0', () => {
+      console.log(`🚀 Server spinning on http://localhost:${port}`);
+    });
+  } catch (error) {
+    console.error("Critical System Failure:", error);
+    process.exit(1);
+  }
 };
 
 
 
 
 const shutdown = async (signal) => {
-    try {
-        console.log(`\nReceived ${signal}, stopping server...`);
-        if (redisClient?.isOpen) {
-            await redisClient.quit();
-            console.log('✅ Redis connection closed');
-        }
-    } catch (error) {
-        console.error('⚠️ Error during shutdown:', error);
-    } finally {
-        process.exit(0);
+  try {
+    console.log(`\nReceived ${signal}, stopping server...`);
+    if (redisClient?.isOpen) {
+      await redisClient.quit();
+      console.log('✅ Redis connection closed');
     }
+  } catch (error) {
+    console.error('⚠️ Error during shutdown:', error);
+  } finally {
+    process.exit(0);
+  }
 };
 
 process.on('SIGINT', () => shutdown('SIGINT'));

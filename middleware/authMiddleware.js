@@ -64,15 +64,15 @@ export const resolveUserFromToken = async (token, req) => {
         return null;
     }
 
-    const fingerprint = computeSessionFingerprint(req);
-    if (!sessionPayload?.fingerprint || sessionPayload.fingerprint !== fingerprint) {
-        console.warn('[server][auth] session fingerprint mismatch. Potential session hijacking attempt.', {
-            expected: sessionPayload?.fingerprint,
-            actual: fingerprint,
-            token: token.substring(0, 10) + '...' 
-        });
-        return null;
-    }
+    // const fingerprint = computeSessionFingerprint(req);
+    // if (!sessionPayload?.fingerprint || sessionPayload.fingerprint !== fingerprint) {
+    //     console.warn('[server][auth] session fingerprint mismatch. Potential session hijacking attempt.', {
+    //         expected: sessionPayload?.fingerprint,
+    //         actual: fingerprint,
+    //         token: token.substring(0, 10) + '...' 
+    //     });
+    //     return null;
+    // }
 
     return sessionPayload.user || null;
 };
