@@ -976,7 +976,6 @@ export const getMe = async (req, res) => {
 
 
 export const getAdminMe = async (req, res) => {
-    console.log(req)
     try {
         // 1. Check if user is logged in at all
         if (!req.user) {

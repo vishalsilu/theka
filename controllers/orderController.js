@@ -651,12 +651,8 @@ export const submitOrderReviews = async (req, res) => {
 // --- REMAINING ADMIN CONTROLLERS ---
 export const getAllOrdersAdmin = async (req, res) => {
   try {
-    const { status, q, sortBy, sortOrder, includeDrafts } = req.query;
+    const { status, q, sortBy, sortOrder } = req.query; 
     const query = {};
-
-    if (includeDrafts !== 'true') {
-      query.isDraft = false;
-    }
 
     if (status && status !== "All") {
       query.status = status;
@@ -681,8 +677,9 @@ export const getAllOrdersAdmin = async (req, res) => {
 
     const field = sortBy === "total" ? "total" : "createdAt";
     const direction = sortOrder === "asc" ? 1 : -1;
+    
     const orders = await Order.find(query).sort({ [field]: direction }).lean();
-
+    
     return res.status(200).json({ success: true, orders });
   } catch (error) {
     return res.status(500).json({ error: error.message });

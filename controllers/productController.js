@@ -115,12 +115,12 @@ const getFirstMidLast = (str) => {
     if (cleanStr.length === 0) return 'XXX';
     if (cleanStr.length === 1) return `${cleanStr[0]}XX`;
     if (cleanStr.length === 2) return `${cleanStr[0]}${cleanStr[1]}X`;
-    
+
     const first = cleanStr[0];
     const last = cleanStr[cleanStr.length - 1];
     const midIndex = Math.floor(cleanStr.length / 2);
     const mid = cleanStr[midIndex];
-    
+
     return `${first}${mid}${last}`;
 };
 
@@ -207,11 +207,11 @@ const formatProductsHelper = (productsRaw) => {
         }, 0);
 
         return {
-            id: product.id || product._id, 
+            id: product.id || product._id,
             name: product.name,
             price: originalPrice,
-            type: product.type || "Standard", 
-            salePrice: Math.round(salePrice), 
+            type: product.type || "Standard",
+            salePrice: Math.round(salePrice),
             discountDisplay,
             fabric: product.fabric,
             pattern: product.pattern,
@@ -227,11 +227,11 @@ const formatProductsHelper = (productsRaw) => {
             description: product.description || null,
             category: product.categoryInfo?.name || null,
             collection: product.collectionInfo?.name || null,
-            variants : variantsArray,
+            variants: variantsArray,
             isFeatured: product.isFeatured || false,
             discount: product.discount || null,
-            sizeType: product.sizeType ,
-            deal : product.deal || null,
+            sizeType: product.sizeType,
+            deal: product.deal || null,
             sponsorPriority: product.sponsorPriority || null,
             sponsorUntil: product.sponsorUntil || null,
             isSponsored: product.isSponsored || false,
@@ -270,12 +270,12 @@ export const createProduct = async (req, res) => {
         if (typeof productData.isFeatured === 'string') productData.isFeatured = parseBooleanValue(productData.isFeatured);
         if (typeof productData.taxable === 'string') productData.taxable = parseBooleanValue(productData.taxable);
         if (typeof productData.isSponsored === 'string') productData.isSponsored = parseBooleanValue(productData.isSponsored);
-        
+
         // BUG FIX: Parse Dates Safely using helper to handle "null" string
         if (typeof productData.sponsorUntil !== 'undefined') {
             productData.sponsorUntil = parseDateValue(productData.sponsorUntil);
         }
-        
+
         productData.status = productData.status || 'ACTIVE';
 
         const resolveReferenceInfo = async (info, Model, fieldName) => {
@@ -284,7 +284,7 @@ export const createProduct = async (req, res) => {
             }
             let record = null;
             if (info.id) {
-                try { record = await Model.findById(info.id).lean(); } catch (err) {}
+                try { record = await Model.findById(info.id).lean(); } catch (err) { }
             }
             if (!record && info.name) record = await Model.findOne({ name: info.name }).lean();
             if (!record) throw new Error(`Invalid ${fieldName}: unable to resolve ${fieldName} by id or name.`);
@@ -304,8 +304,8 @@ export const createProduct = async (req, res) => {
 
         const collectionName = productData.collectionInfo?.name || "";
         const categoryName = productData.categoryInfo?.name || "";
-        const collectionPart = getFirstMidLast(collectionName); 
-        const categoryPart = getFirstMidLast(categoryName);   
+        const collectionPart = getFirstMidLast(collectionName);
+        const categoryPart = getFirstMidLast(categoryName);
         const fitLetter = productData.fit[0]?.toUpperCase() || 'X';
         const patternLetter = productData.pattern[0]?.toUpperCase() || 'X';
         const fabricLetter = productData.fabric[0]?.toUpperCase() || 'X';
@@ -313,7 +313,7 @@ export const createProduct = async (req, res) => {
 
         const randomTail = Math.floor(100000 + Math.random() * 900000);
         const generatedSkuId = `${collectionPart}-${categoryPart}-${attributesPart}-${randomTail}`;
-        
+
         productData.id = generatedSkuId;
         productData.sku = generatedSkuId;
 
@@ -368,7 +368,7 @@ export const createProduct = async (req, res) => {
                 acc[key] = error.errors[key].message;
                 return acc;
             }, {});
-            
+
             return res.status(400).json({
                 success: false,
                 message: "Database Schema Validation Failure",
@@ -376,9 +376,9 @@ export const createProduct = async (req, res) => {
             });
         }
 
-        return res.status(500).json({ 
-            success: false, 
-            message: error.message || "Internal server process error" 
+        return res.status(500).json({
+            success: false,
+            message: error.message || "Internal server process error"
         });
     }
 };
@@ -404,9 +404,9 @@ export const getProductsByCollection = async (req, res) => {
         }
 
         const productsRaw = await Product.find(
-            { 
+            {
                 "collectionInfo.name": { $regex: new RegExp(`^${type}$`, 'i') },
-                status: 'ACTIVE' 
+                status: 'ACTIVE'
             },
             {
                 name: 1, id: 1, price: 1, discount: 1, fabric: 1,
@@ -597,7 +597,7 @@ export const getProductsByCategory = async (req, res) => {
 // --- SET PRODUCT SPONSORSHIP ---
 export const setProductSponsorship = async (req, res) => {
     try {
-        const { id } = req.params; 
+        const { id } = req.params;
         const { isSponsored, sponsorPriority, sponsorUntil } = req.body;
 
         const update = {};
@@ -635,273 +635,273 @@ export const setProductSponsorship = async (req, res) => {
 
 // --- REMOVE REVIEW ---
 export const removeReview = async (req, res) => {
-  try {
-    const { orderId, productId, userId, id } = req.body; 
-
-    if (!userId) return res.status(200).json({ error: "Not authorized" });
-    if (!productId || !id) return res.status(400).json({ error: "Missing required fields" });
-
-    const productDoc = await Product.findOne({ id: productId }).lean();
-    if (!productDoc) return res.status(200).json({ error: "Product not found" });
-
-    const reviewToDelete = productDoc.reviews?.find((review) => String(review._id) === String(id) && String(review.userId) === String(userId));
-    if (!reviewToDelete) return res.status(200).json({ error: "Review not found or not authorized to delete" });
-
-    const reviewImages = Array.isArray(reviewToDelete.images) ? reviewToDelete.images : [];
-
-    const productUpdate = await Product.findOneAndUpdate(
-      { id: productId }, 
-      { $pull: { reviews: { _id: id, userId: userId } } },
-      { new: true }
-    ).lean();
-
-    if (!productUpdate) return res.status(200).json({ error: "Product not found or review already removed" });
-
-    await Promise.allSettled(reviewImages.map(deleteFromCloudinary));
-
-    if (orderId) {
-      await Order.findOneAndUpdate(
-        { orderId, $or: [{ userId: userId }, { reqUserRole: "Admin" }] },
-        { $set: { "items.$[elem].reviewed": { isReviewed: false, review: {} } } },
-        { arrayFilters: [{ "elem.productId": productId }], new: true }
-      );
-    }
-
     try {
-        const detailKeys = [
-            `product:detail:${productId}`,
-            `product:detail:${productUpdate.id}`,
-            `product:detail:${productUpdate._id}`
-        ].filter(Boolean).map(String);
-        await safeRedisDel(detailKeys);
+        const { orderId, productId, userId, id } = req.body;
 
-        await invalidateProductCache({
-            categoryId: normalizeCacheId(productUpdate.categoryInfo?.id || productUpdate.categoryInfo?._id),
-            collectionId: normalizeCacheId(productUpdate.collectionInfo?.id || productUpdate.collectionInfo?._id),
-            categoryName: productUpdate.categoryInfo?.name,
-            collectionName: productUpdate.collectionInfo?.name,
-            productId: productUpdate.id
-        });
+        if (!userId) return res.status(200).json({ error: "Not authorized" });
+        if (!productId || !id) return res.status(400).json({ error: "Missing required fields" });
 
-        if (orderId) await safeRedisDel(`order:detail:${orderId}`).catch(() => {});
-        if (userId) await safeRedisDel(`orders:user:${userId}`).catch(() => {});
+        const productDoc = await Product.findOne({ id: productId }).lean();
+        if (!productDoc) return res.status(200).json({ error: "Product not found" });
+
+        const reviewToDelete = productDoc.reviews?.find((review) => String(review._id) === String(id) && String(review.userId) === String(userId));
+        if (!reviewToDelete) return res.status(200).json({ error: "Review not found or not authorized to delete" });
+
+        const reviewImages = Array.isArray(reviewToDelete.images) ? reviewToDelete.images : [];
+
+        const productUpdate = await Product.findOneAndUpdate(
+            { id: productId },
+            { $pull: { reviews: { _id: id, userId: userId } } },
+            { new: true }
+        ).lean();
+
+        if (!productUpdate) return res.status(200).json({ error: "Product not found or review already removed" });
+
+        await Promise.allSettled(reviewImages.map(deleteFromCloudinary));
+
+        if (orderId) {
+            await Order.findOneAndUpdate(
+                { orderId, $or: [{ userId: userId }, { reqUserRole: "Admin" }] },
+                { $set: { "items.$[elem].reviewed": { isReviewed: false, review: {} } } },
+                { arrayFilters: [{ "elem.productId": productId }], new: true }
+            );
+        }
+
         try {
-            const pidStr = String(productUpdate.id || productId || '');
-            const mongoIdStr = String(productUpdate._id || '');
-            for await (const key of redisClient.scanIterator({ MATCH: `product:detail:*${pidStr}*` })) {
-                await safeRedisDel(key).catch(() => {});
-            }
-            if (mongoIdStr) {
-                for await (const key of redisClient.scanIterator({ MATCH: `product:detail:*${mongoIdStr}*` })) {
-                    await safeRedisDel(key).catch(() => {});
-                }
-            }
-        } catch (sweepErr) {}
-    } catch (err) {}
+            const detailKeys = [
+                `product:detail:${productId}`,
+                `product:detail:${productUpdate.id}`,
+                `product:detail:${productUpdate._id}`
+            ].filter(Boolean).map(String);
+            await safeRedisDel(detailKeys);
 
-    return res.status(200).json({ success: true, message: "Review removed and cache refreshed successfully" });
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
-  }
+            await invalidateProductCache({
+                categoryId: normalizeCacheId(productUpdate.categoryInfo?.id || productUpdate.categoryInfo?._id),
+                collectionId: normalizeCacheId(productUpdate.collectionInfo?.id || productUpdate.collectionInfo?._id),
+                categoryName: productUpdate.categoryInfo?.name,
+                collectionName: productUpdate.collectionInfo?.name,
+                productId: productUpdate.id
+            });
+
+            if (orderId) await safeRedisDel(`order:detail:${orderId}`).catch(() => { });
+            if (userId) await safeRedisDel(`orders:user:${userId}`).catch(() => { });
+            try {
+                const pidStr = String(productUpdate.id || productId || '');
+                const mongoIdStr = String(productUpdate._id || '');
+                for await (const key of redisClient.scanIterator({ MATCH: `product:detail:*${pidStr}*` })) {
+                    await safeRedisDel(key).catch(() => { });
+                }
+                if (mongoIdStr) {
+                    for await (const key of redisClient.scanIterator({ MATCH: `product:detail:*${mongoIdStr}*` })) {
+                        await safeRedisDel(key).catch(() => { });
+                    }
+                }
+            } catch (sweepErr) { }
+        } catch (err) { }
+
+        return res.status(200).json({ success: true, message: "Review removed and cache refreshed successfully" });
+    } catch (error) {
+        return res.status(500).json({ error: error.message });
+    }
 };
 
 // --- REMOVE REVIEW (ADMIN) ---
 export const removeReviewAdmin = async (req, res) => {
-  try {
-    const { id } = req.body; 
-    if (!id) return res.status(400).json({ error: "Missing review ID" });
-
-    const targetProduct = await Product.findOne({ "reviews._id": id });
-    if (!targetProduct) return res.status(200).json({ error: "Review not found or already removed from product" });
-
-    const productId = targetProduct._id; 
-    const customProductId = targetProduct.id;
-    const reviewData = targetProduct.reviews.find(r => String(r._id) === String(id));
-    const userId = reviewData?.userId;
-    const reviewImages = Array.isArray(reviewData?.images) ? reviewData.images : [];
-
-    const productUpdate = await Product.findByIdAndUpdate(
-      productId,
-      { $pull: { reviews: { _id: id } } },
-      { new: true }
-    ).lean();
-
-    if (reviewImages.length) {
-      await Promise.allSettled(reviewImages.map(deleteFromCloudinary));
-    }
-
-    let derivedOrderId = null;
-    if (userId) {
-      const companionOrder = await Order.findOneAndUpdate(
-        { userId: userId, "items.productId": productId },
-        { $set: { "items.$[elem].reviewed": { isReviewed: false, review: {} } } },
-        { arrayFilters: [{ "elem.productId": productId }], new: true }
-      ).lean();
-      if (companionOrder) derivedOrderId = companionOrder.orderId;
-    }
-
     try {
-        await safeRedisDel(`product:detail:${productId}`, `product:detail:${customProductId}`);
-        await invalidateProductCache({
-            categoryId: normalizeCacheId(productUpdate.categoryInfo?.id || productUpdate.categoryInfo?._id),
-            collectionId: normalizeCacheId(productUpdate.collectionInfo?.id || productUpdate.collectionInfo?._id),
-            categoryName: productUpdate.categoryInfo?.name,
-            collectionName: productUpdate.collectionInfo?.name,
-            productId: productUpdate.id
-        });
+        const { id } = req.body;
+        if (!id) return res.status(400).json({ error: "Missing review ID" });
 
-        if (userId) await safeRedisDel(`orders:user:${userId}`).catch(() => {});
-        if (derivedOrderId) await safeRedisDel(`order:detail:${derivedOrderId}`).catch(() => {});
+        const targetProduct = await Product.findOne({ "reviews._id": id });
+        if (!targetProduct) return res.status(200).json({ error: "Review not found or already removed from product" });
+
+        const productId = targetProduct._id;
+        const customProductId = targetProduct.id;
+        const reviewData = targetProduct.reviews.find(r => String(r._id) === String(id));
+        const userId = reviewData?.userId;
+        const reviewImages = Array.isArray(reviewData?.images) ? reviewData.images : [];
+
+        const productUpdate = await Product.findByIdAndUpdate(
+            productId,
+            { $pull: { reviews: { _id: id } } },
+            { new: true }
+        ).lean();
+
+        if (reviewImages.length) {
+            await Promise.allSettled(reviewImages.map(deleteFromCloudinary));
+        }
+
+        let derivedOrderId = null;
+        if (userId) {
+            const companionOrder = await Order.findOneAndUpdate(
+                { userId: userId, "items.productId": productId },
+                { $set: { "items.$[elem].reviewed": { isReviewed: false, review: {} } } },
+                { arrayFilters: [{ "elem.productId": productId }], new: true }
+            ).lean();
+            if (companionOrder) derivedOrderId = companionOrder.orderId;
+        }
+
         try {
-            const pidStr = String(productUpdate?.id || customProductId || '');
-            const mongoIdStr = String(productId || '');
-            for await (const key of redisClient.scanIterator({ MATCH: `product:detail:*${pidStr}*` })) {
-                await safeRedisDel(key).catch(() => {});
-            }
-            if (mongoIdStr) {
-                for await (const key of redisClient.scanIterator({ MATCH: `product:detail:*${mongoIdStr}*` })) {
-                    await safeRedisDel(key).catch(() => {});
-                }
-            }
-        } catch (sweepErr) {}
-    } catch (err) {}
+            await safeRedisDel(`product:detail:${productId}`, `product:detail:${customProductId}`);
+            await invalidateProductCache({
+                categoryId: normalizeCacheId(productUpdate.categoryInfo?.id || productUpdate.categoryInfo?._id),
+                collectionId: normalizeCacheId(productUpdate.collectionInfo?.id || productUpdate.collectionInfo?._id),
+                categoryName: productUpdate.categoryInfo?.name,
+                collectionName: productUpdate.collectionInfo?.name,
+                productId: productUpdate.id
+            });
 
-    return res.status(200).json({ success: true, message: "Review removed successfully by Admin" });
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
-  }
+            if (userId) await safeRedisDel(`orders:user:${userId}`).catch(() => { });
+            if (derivedOrderId) await safeRedisDel(`order:detail:${derivedOrderId}`).catch(() => { });
+            try {
+                const pidStr = String(productUpdate?.id || customProductId || '');
+                const mongoIdStr = String(productId || '');
+                for await (const key of redisClient.scanIterator({ MATCH: `product:detail:*${pidStr}*` })) {
+                    await safeRedisDel(key).catch(() => { });
+                }
+                if (mongoIdStr) {
+                    for await (const key of redisClient.scanIterator({ MATCH: `product:detail:*${mongoIdStr}*` })) {
+                        await safeRedisDel(key).catch(() => { });
+                    }
+                }
+            } catch (sweepErr) { }
+        } catch (err) { }
+
+        return res.status(200).json({ success: true, message: "Review removed successfully by Admin" });
+    } catch (error) {
+        return res.status(500).json({ error: error.message });
+    }
 };
 
 // --- ADD PRODUCT REVIEW ---
 export const addProductReview = async (req, res) => {
-  try {
-    if (!req.user) return res.status(200).json({ error: "Login required to submit a review." });
+    try {
+        if (!req.user) return res.status(200).json({ error: "Login required to submit a review." });
 
-    const { id } = req.params;
-    const query = [{ id }];
-    if (mongoose.Types.ObjectId.isValid(id)) query.push({ _id: id });
-    
-    const product = await Product.findOne({ $or: query });
-    if (!product) return res.status(200).json({ error: "Product not found" });
+        const { id } = req.params;
+        const query = [{ id }];
+        if (mongoose.Types.ObjectId.isValid(id)) query.push({ _id: id });
 
-    const rating = Number(req.body.rating || req.body.rate || 0);
-    const title = String(req.body.title || '').trim();
-    const comment = String(req.body.comment || '').trim();
-    const variant = String(req.body.variant || '').trim();
+        const product = await Product.findOne({ $or: query });
+        if (!product) return res.status(200).json({ error: "Product not found" });
 
-    if (!rating || rating < 1 || rating > 5) return res.status(400).json({ error: "Rating must be between 1 and 5." });
-    if (!comment) return res.status(400).json({ error: "Review comment is required." });
+        const rating = Number(req.body.rating || req.body.rate || 0);
+        const title = String(req.body.title || '').trim();
+        const comment = String(req.body.comment || '').trim();
+        const variant = String(req.body.variant || '').trim();
 
-    const uploadedImages = (req.files || []).map(getFileUrl).filter(Boolean);
+        if (!rating || rating < 1 || rating > 5) return res.status(400).json({ error: "Rating must be between 1 and 5." });
+        if (!comment) return res.status(400).json({ error: "Review comment is required." });
 
-    const review = {
-      user: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || req.user.email || 'Anonymous',
-      userId: req.user.id,
-      orderId: null,
-      productId: product.id || String(product._id),
-      variant,
-      title,
-      comment,
-      images: uploadedImages,
-      rating,
-      date: new Date().toISOString().split('T')[0]
-    };
+        const uploadedImages = (req.files || []).map(getFileUrl).filter(Boolean);
 
-    product.reviews = product.reviews || [];
-    product.reviews.push(review);
-    await product.save();
+        const review = {
+            user: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || req.user.email || 'Anonymous',
+            userId: req.user.id,
+            orderId: null,
+            productId: product.id || String(product._id),
+            variant,
+            title,
+            comment,
+            images: uploadedImages,
+            rating,
+            date: new Date().toISOString().split('T')[0]
+        };
 
-    const savedReview = product.reviews[product.reviews.length - 1];
+        product.reviews = product.reviews || [];
+        product.reviews.push(review);
+        await product.save();
 
-    await safeRedisDel(`product:detail:${product.id}`, `product:detail:${product._id}`);
-    await invalidateProductCache({
-      collectionId: product.collectionInfo?.id,
-      categoryId: product.categoryInfo?.id,
-      collectionName: product.collectionInfo?.name,
-      categoryName: product.categoryInfo?.name
-    });
+        const savedReview = product.reviews[product.reviews.length - 1];
 
-    return res.status(201).json({ success: true, review: savedReview });
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
-  }
+        await safeRedisDel(`product:detail:${product.id}`, `product:detail:${product._id}`);
+        await invalidateProductCache({
+            collectionId: product.collectionInfo?.id,
+            categoryId: product.categoryInfo?.id,
+            collectionName: product.collectionInfo?.name,
+            categoryName: product.categoryInfo?.name
+        });
+
+        return res.status(201).json({ success: true, review: savedReview });
+    } catch (error) {
+        return res.status(500).json({ error: error.message });
+    }
 };
 
 // --- UPDATE PRODUCT REVIEW ---
 export const updateProductReview = async (req, res) => {
-  try {
-    if (!req.user) return res.status(200).json({ error: "Login required to update a review." });
+    try {
+        if (!req.user) return res.status(200).json({ error: "Login required to update a review." });
 
-    const { id, reviewId } = req.params;
-    const query = [{ id }];
-    if (mongoose.Types.ObjectId.isValid(id)) query.push({ _id: id });
+        const { id, reviewId } = req.params;
+        const query = [{ id }];
+        if (mongoose.Types.ObjectId.isValid(id)) query.push({ _id: id });
 
-    const product = await Product.findOne({ $or: query });
-    if (!product) return res.status(200).json({ error: "Product not found" });
+        const product = await Product.findOne({ $or: query });
+        if (!product) return res.status(200).json({ error: "Product not found" });
 
-    const review = product.reviews?.find((rev) => String(rev._id) === String(reviewId));
-    if (!review) return res.status(200).json({ error: "Review not found" });
+        const review = product.reviews?.find((rev) => String(rev._id) === String(reviewId));
+        if (!review) return res.status(200).json({ error: "Review not found" });
 
-    if (String(review.userId) !== String(req.user.id) && req.user.role !== 'Admin') {
-      return res.status(403).json({ error: "Not authorized to update this review." });
-    }
+        if (String(review.userId) !== String(req.user.id) && req.user.role !== 'Admin') {
+            return res.status(403).json({ error: "Not authorized to update this review." });
+        }
 
-    const rating = Number(req.body.rating || req.body.rate || review.rating || 0);
-    const title = String(req.body.title || review.title || '').trim();
-    const comment = String(req.body.comment || review.comment || '').trim();
-    const variant = String(req.body.variant || review.variant || '').trim();
-    
-    let removedImages = [];
-    if (req.body.removedImages) {
-        try {
-            if (typeof req.body.removedImages === 'string') {
-                removedImages = JSON.parse(req.body.removedImages);
-            } else {
-                removedImages = req.body.removedImages;
+        const rating = Number(req.body.rating || req.body.rate || review.rating || 0);
+        const title = String(req.body.title || review.title || '').trim();
+        const comment = String(req.body.comment || review.comment || '').trim();
+        const variant = String(req.body.variant || review.variant || '').trim();
+
+        let removedImages = [];
+        if (req.body.removedImages) {
+            try {
+                if (typeof req.body.removedImages === 'string') {
+                    removedImages = JSON.parse(req.body.removedImages);
+                } else {
+                    removedImages = req.body.removedImages;
+                }
+            } catch (err) {
+                removedImages = String(req.body.removedImages).split(',').map(s => s.trim()).filter(Boolean);
             }
-        } catch (err) {
-            removedImages = String(req.body.removedImages).split(',').map(s => s.trim()).filter(Boolean);
         }
-    }
 
-    const uploadedImages = (req.files || []).map(getFileUrl).filter(Boolean);
-    if (!rating || rating < 1 || rating > 5) return res.status(400).json({ error: "Rating must be between 1 and 5." });
-    if (!comment) return res.status(400).json({ error: "Review comment is required." });
+        const uploadedImages = (req.files || []).map(getFileUrl).filter(Boolean);
+        if (!rating || rating < 1 || rating > 5) return res.status(400).json({ error: "Rating must be between 1 and 5." });
+        if (!comment) return res.status(400).json({ error: "Review comment is required." });
 
-    review.title = title;
-    review.comment = comment;
-    review.rating = rating;
-    review.variant = variant;
+        review.title = title;
+        review.comment = comment;
+        review.rating = rating;
+        review.variant = variant;
 
-    if (Array.isArray(removedImages) && removedImages.length) {
-        try {
-            await Promise.allSettled(removedImages.map(deleteFromCloudinary));
-        } catch (err) {
-            console.warn('Failed to delete some images from Cloudinary during review update:', err?.message || err);
+        if (Array.isArray(removedImages) && removedImages.length) {
+            try {
+                await Promise.allSettled(removedImages.map(deleteFromCloudinary));
+            } catch (err) {
+                console.warn('Failed to delete some images from Cloudinary during review update:', err?.message || err);
+            }
+            review.images = Array.isArray(review.images) ? review.images.filter(img => !removedImages.includes(img)) : [];
         }
-        review.images = Array.isArray(review.images) ? review.images.filter(img => !removedImages.includes(img)) : [];
+
+        if (uploadedImages.length) {
+            const before = Array.isArray(review.images) ? review.images : [];
+            const merged = [...before, ...uploadedImages].filter(Boolean);
+            review.images = Array.from(new Set(merged)).slice(0, 5);
+        }
+
+        await product.save();
+
+        await safeRedisDel(`product:detail:${product.id}`, `product:detail:${product._id}`);
+        await invalidateProductCache({
+            collectionId: product.collectionInfo?.id,
+            categoryId: product.categoryInfo?.id,
+            collectionName: product.collectionInfo?.name,
+            categoryName: product.categoryInfo?.name
+        });
+
+        return res.status(200).json({ success: true, review });
+    } catch (error) {
+        return res.status(500).json({ error: error.message });
     }
-
-    if (uploadedImages.length) {
-        const before = Array.isArray(review.images) ? review.images : [];
-        const merged = [...before, ...uploadedImages].filter(Boolean);
-        review.images = Array.from(new Set(merged)).slice(0, 5);
-    }
-
-    await product.save();
-
-    await safeRedisDel(`product:detail:${product.id}`, `product:detail:${product._id}`);
-    await invalidateProductCache({
-      collectionId: product.collectionInfo?.id,
-      categoryId: product.categoryInfo?.id,
-      collectionName: product.collectionInfo?.name,
-      categoryName: product.categoryInfo?.name
-    });
-
-    return res.status(200).json({ success: true, review });
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
-  }
 };
 
 // --- GET SPECIFIC PRODUCT (FULL FETCH) ---
@@ -918,12 +918,12 @@ export const getSpecificProduct = async (req, res) => {
             query.push({ _id: id });
         }
 
-        const product = await Product.findOne({ 
-                $and: [
-                    { $or: query },
-                    { status: 'ACTIVE' }
-                ]
-            })
+        const product = await Product.findOne({
+            $and: [
+                { $or: query },
+                { status: 'ACTIVE' }
+            ]
+        })
             .populate('categoryInfo.id')
             .populate('collectionInfo.id');
 
@@ -941,7 +941,7 @@ export const updateProduct = async (req, res) => {
     try {
         const { id } = req.params;
         let updateData = { ...req.body };
-        
+
         const product = await Product.findOne({ id: id });
         if (!product) return res.status(200).json({ message: "Product not found" });
 
@@ -967,7 +967,7 @@ export const updateProduct = async (req, res) => {
         if (typeof updateData.sponsorPriority === 'string') {
             updateData.sponsorPriority = updateData.sponsorPriority === '' || updateData.sponsorPriority === 'null' ? 0 : Number(updateData.sponsorPriority) || 0;
         }
-        
+
         // BUG FIX: Parse Dates Safely
         if (typeof updateData.sponsorUntil !== 'undefined') {
             updateData.sponsorUntil = parseDateValue(updateData.sponsorUntil);
@@ -1008,16 +1008,18 @@ export const updateProduct = async (req, res) => {
         );
 
         await safeRedisDel(`product:detail:${id}`, `product:detail:${updatedProduct?._id || ''}`, `product:detail:${updatedProduct?.id || ''}`);
-        await safeRedisDel("products:featured", "products:all");
+        await safeRedisDel("products:featured");
+        await safeRedisDel("products:all");
+        await safeRedisDel("products:admin:all");
 
         try {
             const oldImages = Array.isArray(product?.variants) ? product.variants.flatMap(v => (v.images || [])) : [];
             const newImages = Array.isArray(updatedProduct?.variants) ? updatedProduct.variants.flatMap(v => (v.images || [])) : [];
             const imagesToDelete = oldImages.filter((img) => img && !newImages.includes(img));
             for (const img of imagesToDelete) {
-                try { await deleteFromCloudinary(img); } catch (err) {}
+                try { await deleteFromCloudinary(img); } catch (err) { }
             }
-        } catch (err) {}
+        } catch (err) { }
 
         const oldCachePayload = {
             categoryId: normalizeCacheId(product?.categoryInfo?.id || product?.categoryInfo?._id),
@@ -1036,7 +1038,7 @@ export const updateProduct = async (req, res) => {
         await invalidateProductCache(oldCachePayload, newCachePayload);
 
         res.status(200).json({ success: true, data: updatedProduct });
-      
+
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -1053,9 +1055,9 @@ export const deleteProduct = async (req, res) => {
         try {
             const imgs = Array.isArray(deletedProduct.variants) ? deletedProduct.variants.flatMap(v => (v.images || [])) : [];
             for (const img of imgs) {
-                try { await deleteFromCloudinary(img); } catch (err) {}
+                try { await deleteFromCloudinary(img); } catch (err) { }
             }
-        } catch (err) {}
+        } catch (err) { }
 
         await safeRedisDel(`product:detail:${id}`);
         await safeRedisDel("products:featured", "products:all");
@@ -1086,7 +1088,7 @@ export const getFeaturedProducts = async (req, res) => {
         const featuredProducts = await Product.find({ isFeatured: true, status: 'ACTIVE' }, {
             name: 1, id: 1, price: 1, discount: 1, fabric: 1,
             pattern: 1, fit: 1, salesCount: 1, isTrending: 1, createdAt: 1,
-            variants: 1, categoryInfo: 1 , collectionInfo: 1
+            variants: 1, categoryInfo: 1, collectionInfo: 1
         }).lean();
 
         const products = featuredProducts.map(product => {
@@ -1112,8 +1114,8 @@ export const getFeaturedProducts = async (req, res) => {
                 name: product.name,
                 price: originalPrice,
                 type: product.collectionInfo.name,
-                trending : product.isTrending,
-                category : product.categoryInfo.name,
+                trending: product.isTrending,
+                category: product.categoryInfo.name,
                 salePrice,
                 discountDisplay,
                 fabric: product.fabric,
@@ -1142,11 +1144,11 @@ export const getAllProducts = async (req, res) => {
 
         const cacheKey = "products:admin:all";
         const cached = await redisClient.get(cacheKey);
-        
+
         if (cached) return res.status(200).json(JSON.parse(cached));
 
         const productsRaw = await Product.find({})
-            .select("name id price discount fabric pattern fit salesCount isTrending createdAt variants type description categoryInfo collectionInfo isFeatured sizeType isSponsored sponsorPriority deal sponsorUntil status" ) 
+            .select("name id price discount fabric pattern fit salesCount isTrending createdAt variants type description categoryInfo collectionInfo isFeatured sizeType isSponsored sponsorPriority deal sponsorUntil status")
             .sort({ createdAt: -1 })
             .lean();
 
@@ -1166,7 +1168,7 @@ export const getAllProducts = async (req, res) => {
 export const toggleProductStatus = async (req, res) => {
     try {
         const { id } = req.params;
-        
+
         const query = [{ id }];
         if (mongoose.Types.ObjectId.isValid(id)) query.push({ _id: id });
 
@@ -1189,7 +1191,7 @@ export const toggleProductStatus = async (req, res) => {
 
         // 4. Actively set the cache with the fresh formatted data
         await redisClient.setEx("products:admin:all", 3600, JSON.stringify(formattedProducts));
-        
+
         await invalidateProductCache({
             categoryId: normalizeCacheId(product.categoryInfo?.id || product.categoryInfo?._id),
             collectionId: normalizeCacheId(product.collectionInfo?.id || product.collectionInfo?._id),
@@ -1198,10 +1200,10 @@ export const toggleProductStatus = async (req, res) => {
             productId: product.id
         });
 
-        res.status(200).json({ 
-            success: true, 
-            message: `Product is now ${product.status}`, 
-            status: product.status 
+        res.status(200).json({
+            success: true,
+            message: `Product is now ${product.status}`,
+            status: product.status
         });
     } catch (error) {
         console.error('Toggle Product Status Error:', error);
