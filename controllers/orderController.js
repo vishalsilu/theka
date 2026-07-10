@@ -7,6 +7,8 @@ import SiteData from "../models/SiteData.js";
 import { evaluateCoupon } from "./couponController.js";
 import axios from "axios"
 import { redisClient } from "../config/redis.js";
+import { razorpayInstance } from "../config/razorpay.js";
+import { sendEmail } from "../config/email.js";
 
 const today = () => new Date().toISOString().split("T")[0];
 
@@ -130,99 +132,99 @@ const clearUserCart = async (userId) => {
   await redisClient.del(`orders:user:${userId}`).catch(() => {});
 };
 
-const triggerDelhiveryShipment = async (order, address, items, paymentMode, siteData) => {
-  console.log(address)
-  const API_TOKEN = process.env.DELHIVERY_API_TOKEN; 
-  // Use 'https://staging-express.delhivery.com/api/cmu/create.json' for testing/sandbox
-  // const ENDPOINT = 'https://track.delhivery.com/api/cmu/create.json'; 
-  const ENDPOINT = 'https://staging-express.delhivery.com/api/cmu/create.json'; 
+// const triggerDelhiveryShipment = async (order, address, items, paymentMode, siteData) => {
+//   console.log(address)
+//   const API_TOKEN = process.env.DELHIVERY_API_TOKEN; 
+//   // Use 'https://staging-express.delhivery.com/api/cmu/create.json' for testing/sandbox
+//   // const ENDPOINT = 'https://track.delhivery.com/api/cmu/create.json'; 
+//   const ENDPOINT = 'https://staging-express.delhivery.com/api/cmu/create.json'; 
 
-  if (!API_TOKEN) {
-    throw new Error("Delhivery API token is missing from environment variables.");
-  }
+//   if (!API_TOKEN) {
+//     throw new Error("Delhivery API token is missing from environment variables.");
+//   }
 
-  // Compile individual product names into a readable shipping label description
-  const productDescription = items.map(i => `${i.name} (x${i.quantity})`).join(', ');
+//   // Compile individual product names into a readable shipping label description
+//   const productDescription = items.map(i => `${i.name} (x${i.quantity})`).join(', ');
 
-  // Extract dynamic contact and address data from siteData
-  const contactInfo = siteData?.contact || {};
-  const siteAddress = contactInfo.address || {};
+//   // Extract dynamic contact and address data from siteData
+//   const contactInfo = siteData?.contact || {};
+//   const siteAddress = contactInfo.address || {};
   
-  // Create a fallback-safe full address string
-  const fullSiteAddress = siteAddress.address || 
-    [siteAddress.appartment, siteAddress.street].filter(Boolean).join(', ') || 
-    process.env.DELHIVERY_PICKUP_ADDRESS || 
-    "Registered Store Address";
+//   // Create a fallback-safe full address string
+//   const fullSiteAddress = siteAddress.address || 
+//     [siteAddress.appartment, siteAddress.street].filter(Boolean).join(', ') || 
+//     process.env.DELHIVERY_PICKUP_ADDRESS || 
+//     "Registered Store Address";
 
-  const rawPhone = address.phone || address.phoneNumber || address.mobile || contactInfo.phone ;
+//   const rawPhone = address.phone || address.phoneNumber || address.mobile || contactInfo.phone ;
   
-  // Clean it up (removes spaces, +91, etc., keeping just the last 10 digits)
-  const customerPhone = String(rawPhone).replace(/\D/g, '').slice(-10);
-  const orderValue = Number(order.totalAmount || order.total || order.finalAmount || order.amount || 0);
+//   // Clean it up (removes spaces, +91, etc., keeping just the last 10 digits)
+//   const customerPhone = String(rawPhone).replace(/\D/g, '').slice(-10);
+//   const orderValue = Number(order.totalAmount || order.total || order.finalAmount || order.amount || 0);
 
-  if (paymentMode === 'COD' && orderValue <= 0) {
-    console.warn("Attempted COD Delhivery shipment with 0 amount. Delhivery will reject this.");
-  }
+//   if (paymentMode === 'COD' && orderValue <= 0) {
+//     console.warn("Attempted COD Delhivery shipment with 0 amount. Delhivery will reject this.");
+//   }
 
-  const userName=address.firstName + " " + address.lastName
-  const finalAddress = address.street + " " + address.apartment + " " + address.city + " " + address.state + address.zip + address.country
+//   const userName=address.firstName + " " + address.lastName
+//   const finalAddress = address.street + " " + address.apartment + " " + address.city + " " + address.state + address.zip + address.country
 
-  const payload = {
-    "shipments": [
-      {
-        "name": userName, 
-        "add": finalAddress,
-        "pin": String(address.pincode || address.zip), 
-        "city": address.city,
-        "state": address.state,
-        "country": "India",
-        "phone": customerPhone,
-        "order": order.orderId,
-        "payment_mode": paymentMode, // Must be exactly "COD" or "Prepaid"
+//   const payload = {
+//     "shipments": [
+//       {
+//         "name": userName, 
+//         "add": finalAddress,
+//         "pin": String(address.pincode || address.zip), 
+//         "city": address.city,
+//         "state": address.state,
+//         "country": "India",
+//         "phone": customerPhone,
+//         "order": order.orderId,
+//         "payment_mode": paymentMode, // Must be exactly "COD" or "Prepaid"
         
-        // --- DYNAMIC RETURN ADDRESS ---
-        "return_add": fullSiteAddress,
-        "return_city": siteAddress.city,
-        "return_state": siteAddress.state,
-        "return_pin": siteAddress.pin, 
-        "return_phone": contactInfo.phone,
-        "return_country": "India",
+//         // --- DYNAMIC RETURN ADDRESS ---
+//         "return_add": fullSiteAddress,
+//         "return_city": siteAddress.city,
+//         "return_state": siteAddress.state,
+//         "return_pin": siteAddress.pin, 
+//         "return_phone": contactInfo.phone,
+//         "return_country": "India",
         
-        "products_desc": productDescription, 
-        "total_amount": orderValue, 
-        "cod_amount": paymentMode === 'COD' ? orderValue : 0, 
-        "order_date": new Date().toISOString(),
-        "seller_name": siteData?.websiteName || "URBANROYALTY SURFACE", 
-        "seller_inv": `INV-${order.orderId}`,
-        "quantity": String(items.reduce((acc, curr) => acc + curr.quantity, 0)),
-        "waybill": "" // Left empty so Delhivery auto-assigns an AWB
-      }
-    ],
-    // --- EXACT REGISTERED PICKUP LOCATION ---
-    "pickup_location": {
-      "name": "URBANROYALTY SURFACE" // Must match your testing credential name exactly
-    }
-  };
+//         "products_desc": productDescription, 
+//         "total_amount": orderValue, 
+//         "cod_amount": paymentMode === 'COD' ? orderValue : 0, 
+//         "order_date": new Date().toISOString(),
+//         "seller_name": siteData?.websiteName || "URBANROYALTY SURFACE", 
+//         "seller_inv": `INV-${order.orderId}`,
+//         "quantity": String(items.reduce((acc, curr) => acc + curr.quantity, 0)),
+//         "waybill": "" // Left empty so Delhivery auto-assigns an AWB
+//       }
+//     ],
+//     // --- EXACT REGISTERED PICKUP LOCATION ---
+//     "pickup_location": {
+//       "name": "URBANROYALTY SURFACE" // Must match your testing credential name exactly
+//     }
+//   };
 
-  // Build key-value URL parameters
-  const params = new URLSearchParams();
-  params.append('format', 'json');
-  params.append('data', JSON.stringify(payload));
+//   // Build key-value URL parameters
+//   const params = new URLSearchParams();
+//   params.append('format', 'json');
+//   params.append('data', JSON.stringify(payload));
 
-  const response = await axios.post(ENDPOINT, params.toString(), {
-    headers: {
-      'Authorization': `Token ${API_TOKEN}`,
-      'Content-Type': 'application/x-www-form-urlencoded'
-    }
-  });
+//   const response = await axios.post(ENDPOINT, params.toString(), {
+//     headers: {
+//       'Authorization': `Token ${API_TOKEN}`,
+//       'Content-Type': 'application/x-www-form-urlencoded'
+//     }
+//   });
 
-  if (response.data && response.data.success) {
-    // Return the generated waybill tracking number
-    return response.data.packages[0].waybill;
-  } else {
-    throw new Error(`Delhivery payload rejected: ${JSON.stringify(response.data)}`);
-  }
-};
+//   if (response.data && response.data.success) {
+//     // Return the generated waybill tracking number
+//     return response.data.packages[0].waybill;
+//   } else {
+//     throw new Error(`Delhivery payload rejected: ${JSON.stringify(response.data)}`);
+//   }
+// };
 
 export const createOrder = async (req, res) => {
   try {
@@ -408,22 +410,18 @@ export const createOrder = async (req, res) => {
         }
       } catch (err) { console.warn("Cache invalidation error", err); }
 
-      // ----------------------------------------------------
-      // INTEGRATION: PUSH TO DELHIVERY DIRECTLY FOR COD
-      // ----------------------------------------------------
-      try {
-        const waybill = await triggerDelhiveryShipment(order, shippingAddress, enrichedItems, "COD", siteData, totals);
-        if (waybill) {
-          order.awb = waybill;
-          order.tracking.push({ status: "Waybill Generated", date: new Date(), location: "Delhivery" });
-          await order.save();
-        }
-      } catch (delhiveryError) {
-        console.error("Non-fatal: Delhivery COD registration failed:", delhiveryError.message);
-        // The transaction successfully commits inside your system even if delivery logistics time out.
-      }
-      // ----------------------------------------------------
 
+      // try {
+      //   const waybill = await triggerDelhiveryShipment(order, shippingAddress, enrichedItems, "COD", siteData, totals);
+      //   if (waybill) {
+      //     order.awb = waybill;
+      //     order.tracking.push({ status: "Waybill Generated", date: new Date(), location: "Delhivery" });
+      //     await order.save();
+      //   }
+      // } catch (delhiveryError) {
+      //   console.error("Non-fatal: Delhivery COD registration failed:", delhiveryError.message);
+      // }
+      
       // Create invoice record
       try {
         const { createInvoiceForOrder } = await import('./invoiceController.js');
@@ -477,34 +475,31 @@ export const finalizeRazorpayOrder = async ({ order, paymentDetails = {}, eventL
     { new: true }
   ).lean();
 
-  // ----------------------------------------------------
-  // INTEGRATION: PUSH TO DELHIVERY FOR VERIFIED PREPAID
-  // ----------------------------------------------------
-  try {
-    const siteData = await SiteData.findOne({}).lean();
+
+  // try {
+  //   const siteData = await SiteData.findOne({}).lean();
     
-    const waybill = await triggerDelhiveryShipment(
-      updatedOrder, 
-      updatedOrder.shippingAddress, 
-      updatedOrder.items, 
-      "Prepaid",
-      siteData
-    );
+  //   const waybill = await triggerDelhiveryShipment(
+  //     updatedOrder, 
+  //     updatedOrder.shippingAddress, 
+  //     updatedOrder.items, 
+  //     "Prepaid",
+  //     siteData
+  //   );
     
-    if (waybill) {
-      await Order.updateOne(
-        { orderId: updatedOrder.orderId },
-        { 
-          $set: { awb: waybill },
-          $push: { tracking: { status: "Waybill Generated", date: new Date(), location: "Delhivery" } }
-        }
-      );
-      updatedOrder.awb = waybill; // Injects property into memory object for downstream invoice parsing
-    }
-  } catch (delhiveryError) {
-    console.error("Non-fatal: Delhivery Prepaid registration failed:", delhiveryError.message);
-  }
-  // ----------------------------------------------------
+  //   if (waybill) {
+  //     await Order.updateOne(
+  //       { orderId: updatedOrder.orderId },
+  //       { 
+  //         $set: { awb: waybill },
+  //         $push: { tracking: { status: "Waybill Generated", date: new Date(), location: "Delhivery" } }
+  //       }
+  //     );
+  //     updatedOrder.awb = waybill; // Injects property into memory object for downstream invoice parsing
+  //   }
+  // } catch (delhiveryError) {
+  //   console.error("Non-fatal: Delhivery Prepaid registration failed:", delhiveryError.message);
+  // }
 
   try {
     const { createInvoiceForOrder } = await import('./invoiceController.js');
@@ -844,83 +839,233 @@ export const deleteOrderAdmin = async (req, res) => {
 
 // --- ISSUE REFUND (ADMIN) ---
 export const issueRefundAdmin = async (req, res) => {
+  const OTP_TTL_SECONDS = 60 * 10; // 10 minutes
   try {
     const { orderId } = req.params;
-    const { items = [], adjustment = 0, note = '', method = 'original' } = req.body;
+    const { items = [], adjustment = 0, note = '', otp } = req.body;
+    
+    // Admin verification
+    if (req.user?.role !== 'Admin') {
+      return res.status(403).json({ error: 'Forbidden. Admin access required.' });
+    }
+    const adminEmail = req.user?.email;
+    if (!adminEmail) return res.status(400).json({ error: 'Admin email not available for OTP.' });
 
     const order = await Order.findOne({ orderId });
-    if (!order) return res.status(200).json({ error: 'Order not found' });
 
-    // Calculate refund amount from items
-    let refundAmount = 0;
-    const restockOperations = [];
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    var paymentId = order?.paymentDetails?.razorpayPaymentId
 
-    for (const it of items) {
-      const productId = String(it.productId || '');
-      const qty = Number(it.quantity || 0);
-      if (!productId || qty <= 0) continue;
+    // Unique Redis key per admin per order to prevent cross-contamination
+    const redisKey = `refund:pending:${req.user.id}:${orderId}`;
 
-      const orderItem = order.items.find(o => String(o.productId) === productId);
-      if (!orderItem) continue;
+    // ==========================================
+    // PHASE 1: INITIATE REFUND & SEND OTP
+    // ==========================================
+    if (!otp) {
+      // Calculate refund amount and map exact items for restocking
+      let refundAmount = 0;
+      const restockOperations = [];
 
-      const perUnit = Number(orderItem.price || 0);
-      const line = Math.min(qty, orderItem.quantity || 0);
-      refundAmount += perUnit * line;
+      for (const it of items) {
+        const productId = String(it.productId || '');
+        const qty = Number(it.quantity || 0);
+        if (!productId || qty <= 0) continue;
 
-      if (it.restock) {
-        restockOperations.push({ productId, quantity: line });
+        const orderItem = order.items.find(o => String(o.productId) === productId);
+        if (!orderItem) continue;
+
+        const perUnit = Number(orderItem.price || 0);
+        const line = Math.min(qty, orderItem.quantity || 0);
+        refundAmount += perUnit * line;
+
+        if (it.restock) {
+          restockOperations.push({ 
+            productId, 
+            quantity: line,
+            variant: orderItem.variant,
+            size: orderItem.size,
+            name: orderItem.name 
+          });
+        }
+      }
+
+     
+      refundAmount = refundAmount + Number(adjustment || 0);
+
+      // Pre-flight checks before sending OTP
+      if (refundAmount <= 0) {
+        return res.status(400).json({ error: 'Refund amount must be greater than zero.' });
+      }
+      if (order.paymentMode !== 'COD' && !paymentId) {
+        return res.status(400).json({ error: 'No Razorpay Payment ID found for this prepaid order.' });
+      }
+
+      // Generate 6-digit OTP
+      const generatedOtp = String(Math.floor(100000 + Math.random() * 900000));
+
+      // Store in Redis (cache the calculations so we don't recalculate on confirmation)
+      const store = { 
+        otp: generatedOtp, 
+        payload: { items, adjustment, note }, 
+        computed: { refundAmount, restockOperations },
+        createdAt: Date.now() 
+      };
+      await redisClient.setEx(redisKey, OTP_TTL_SECONDS, JSON.stringify(store));
+
+      // HTML Email UI for Refund Confirmation
+      const subject = `URGENT: Confirm Refund for Order #${orderId}`;
+      const html = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e5e5e5; padding: 20px;">
+          <h2 style="color: #dc2626;">Confirm Refund Request</h2>
+          <p>An admin has requested a refund for <strong>Order #${orderId}</strong>. Please confirm this action using the OTP below.</p>
+          
+          <div style="background-color: #f3f4f6; padding: 15px; text-align: center; font-size: 24px; font-weight: bold; letter-spacing: 5px; margin: 20px 0;">
+            ${generatedOtp}
+          </div>
+
+          <h4 style="border-bottom: 1px solid #ccc; padding-bottom: 5px;">Refund Details</h4>
+          <ul style="list-style: none; padding: 0;">
+            <li style="margin-bottom: 8px;"><strong>Total Refund Amount:</strong> ₹${refundAmount}</li>
+            <li style="margin-bottom: 8px;"><strong>Manual Adjustment:</strong> ₹${adjustment}</li>
+            <li style="margin-bottom: 8px;"><strong>Reason / Note:</strong> ${note || 'None provided'}</li>
+          </ul>
+
+          <h4 style="border-bottom: 1px solid #ccc; padding-bottom: 5px;">Items to Restock</h4>
+          <ul style="list-style: none; padding: 0;">
+            ${restockOperations.length > 0 
+              ? restockOperations.map(op => `<li>📦 ${op.name} (Variant: ${op.variant || 'N/A'}, Size: ${op.size || 'N/A'}) - <strong>Qty: ${op.quantity}</strong></li>`).join('') 
+              : '<li>No items selected for restocking.</li>'}
+          </ul>
+
+          <p style="font-size: 12px; color: #6b7280; margin-top: 20px;">This OTP expires in 10 minutes. If you did not request this, please secure your admin account.</p>
+        </div>
+      `;
+
+      const emailResult = await sendEmail({ to: adminEmail, subject, html });
+      if (!emailResult?.success) {
+        console.warn('Failed to send refund OTP email', emailResult);
+        return res.status(202).json({ requiresOtp: true, message: 'OTP generated but email delivery failed. Check server logs.' });
+      }
+
+      // Tell frontend to show the OTP modal
+      return res.status(200).json({ 
+        requiresOtp: true, 
+        message: 'OTP sent to admin email.',
+        refundAmount // Pass amount back so frontend can show "Confirm refund of ₹X"
+      });
+    }
+
+    // ==========================================
+    // PHASE 2: VALIDATE OTP & PROCESS REFUND
+    // ==========================================
+    
+    // Fetch cached data from Redis
+    const cachedDataString = await redisClient.get(redisKey);
+    if (!cachedDataString) {
+      return res.status(400).json({ error: 'Refund request expired or not found. Please initiate the refund again.' });
+    }
+
+    const cachedData = JSON.parse(cachedDataString);
+
+    // Validate OTP
+    if (String(cachedData.otp) !== String(otp)) {
+      return res.status(400).json({ error: 'Invalid OTP. Refund cancelled.' });
+    }
+
+    // Extract pre-calculated values securely from Redis
+    const { refundAmount, restockOperations } = cachedData.computed;
+    const { items: originalItems, adjustment: originalAdjustment, note: originalNote } = cachedData.payload;
+
+    // Process Razorpay Refund (Skip if COD)
+    let razorpayRefundId = null;
+    
+    if (order.paymentMode !== 'COD') {
+      try {
+        const refundResponse = await razorpayInstance.payments.refund(paymentId, {
+          amount: Math.round(refundAmount * 100), // paise
+          notes: {
+            reason: originalNote || "Admin initiated refund",
+            order_ref: order.orderId
+          }
+        });
+        razorpayRefundId = refundResponse.id;
+      } catch (rpError) {
+        console.error("Razorpay Gateway Error:", rpError);
+        return res.status(500).json({ 
+          error: "Payment Gateway failed to process refund.", 
+          details: rpError.error?.description || rpError.message 
+        });
       }
     }
 
-    refundAmount = refundAmount + Number(adjustment || 0);
-
-    // Create refund record
+    // Create Database Refund Record
     const refundRecord = {
-      id: `RF-${Date.now()}`,
+      id: razorpayRefundId || `RF-COD-${Date.now()}`,
       amount: refundAmount,
-      items: items.map(i => ({ productId: i.productId, quantity: Number(i.quantity || 0), restocked: !!i.restock })),
-      adjustment: Number(adjustment || 0),
-      note: String(note || ''),
-      createdBy: req.user?.id || 'admin',
+      items: originalItems.map(i => ({ 
+        productId: i.productId, 
+        quantity: Number(i.quantity || 0), 
+        restocked: !!i.restock 
+      })),
+      adjustment: Number(originalAdjustment || 0),
+      note: String(originalNote || ''),
+      createdBy: req.user.id,
       createdAt: new Date().toISOString()
     };
 
     order.refunds = order.refunds || [];
     order.refunds.push(refundRecord);
-
-    // Adjust order totals: subtract refund amount from total (simple approach)
     order.total = Math.max(0, Number(order.total || 0) - refundAmount);
-
-    // Push a tracking event
-    order.tracking.push({ status: 'Refunded', date: new Date().toISOString(), location: note || 'Refund processed' });
+    order.status = "Refunded"
+    order.tracking.push({ 
+      status: 'Refunded', 
+      date: new Date().toISOString(), 
+      location: originalNote || 'Refund processed' 
+    });
 
     await order.save();
 
-    // Optional: Restock products
+    // Restock Products (Exact Match Logic)
     for (const op of restockOperations) {
       try {
-        const prod = await Product.findOne({ id: op.productId });
+        const prod = await Product.findOne({ id: op.productId }); 
         if (!prod) continue;
-        // We conservatively add to first variant first size if present
+
+        let stockUpdated = false;
+
         if (prod.variants && prod.variants.length > 0) {
-          const variant = prod.variants[0];
-          if (variant.sizes && variant.sizes.length > 0) {
-            variant.sizes[0].stock = (variant.sizes[0].stock || 0) + Number(op.quantity || 0);
-            await prod.save();
+          const targetVariant = prod.variants.find(v => v.name === op.variant || v.color === op.variant);
+          if (targetVariant && targetVariant.sizes) {
+            const targetSize = targetVariant.sizes.find(s => s.name === op.size || s.size === op.size);
+            if (targetSize) {
+              targetSize.stock = (targetSize.stock || 0) + op.quantity;
+              stockUpdated = true;
+            }
           }
+        }
+
+        if (stockUpdated) {
+          await prod.save();
+        } else {
+          console.warn(`Could not find exact variant/size match to restock: ${op.variant} - ${op.size}`);
         }
       } catch (err) {
         console.warn('Failed to restock', op, err.message || err);
       }
     }
 
-    // Invalidate caches
-    await redisClient.del(`order:detail:${orderId}`).catch(() => {});
-    await redisClient.del(`orders:user:${order.userId}`).catch(() => {});
+    // Cleanup and Invalidate Caches
+    await redisClient.del(redisKey); // Remove OTP from cache so it can't be reused
+    if (typeof redisClient !== 'undefined') {
+      await redisClient.del(`order:detail:${orderId}`).catch(() => {});
+      await redisClient.del(`orders:user:${order.userId}`).catch(() => {});
+    }
 
     return res.status(200).json({ success: true, refund: refundRecord, order });
+
   } catch (error) {
-    console.error('Refund error', error);
+    console.error('Refund controller error:', error);
     return res.status(500).json({ error: error.message });
   }
 };
