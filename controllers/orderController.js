@@ -5,6 +5,7 @@ import Coupon from "../models/Coupon.js";
 import Invoice from "../models/Invoice.js";
 import SiteData from "../models/SiteData.js";
 import { evaluateCoupon } from "./couponController.js";
+import axios from "axios"
 import { redisClient } from "../config/redis.js";
 
 const today = () => new Date().toISOString().split("T")[0];
@@ -129,57 +130,100 @@ const clearUserCart = async (userId) => {
   await redisClient.del(`orders:user:${userId}`).catch(() => {});
 };
 
-export const finalizeRazorpayOrder = async ({ order, paymentDetails = {}, eventLabel = 'Payment Confirmed' }) => {
-  if (!order || !order.orderId) throw new Error('Order is required for finalization');
-  if (['completed', 'failed'].includes(order.paymentStatus)) return order;
+const triggerDelhiveryShipment = async (order, address, items, paymentMode, siteData) => {
+  console.log(address)
+  const API_TOKEN = process.env.DELHIVERY_API_TOKEN; 
+  // Use 'https://staging-express.delhivery.com/api/cmu/create.json' for testing/sandbox
+  // const ENDPOINT = 'https://track.delhivery.com/api/cmu/create.json'; 
+  const ENDPOINT = 'https://staging-express.delhivery.com/api/cmu/create.json'; 
 
-  // Apply coupon usage only when Razorpay payment has truly completed.
-  if (order.coupon?.code) {
-    await applyCouponUsage(order.coupon.code, order.userId);
+  if (!API_TOKEN) {
+    throw new Error("Delhivery API token is missing from environment variables.");
   }
 
-  // Reduce stock and update product sales after payment success.
-  await reduceStockForOrder(order.items || []);
+  // Compile individual product names into a readable shipping label description
+  const productDescription = items.map(i => `${i.name} (x${i.quantity})`).join(', ');
 
-  // Clear the user's cart and invalidate caches.
-  await clearUserCart(order.userId);
+  // Extract dynamic contact and address data from siteData
+  const contactInfo = siteData?.contact || {};
+  const siteAddress = contactInfo.address || {};
+  
+  // Create a fallback-safe full address string
+  const fullSiteAddress = siteAddress.address || 
+    [siteAddress.appartment, siteAddress.street].filter(Boolean).join(', ') || 
+    process.env.DELHIVERY_PICKUP_ADDRESS || 
+    "Registered Store Address";
 
-  const updateFields = {
-    paymentStatus: 'completed',
-    paymentMethod: 'razorpay',
-    status: 'Confirmed',
-    isDraft: false,
-    razorpayOrderId: paymentDetails.orderId,
-    'paymentDetails.razorpayPaymentId': paymentDetails.paymentId,
-    'paymentDetails.razorpayOrderId': paymentDetails.orderId,
-    'paymentDetails.verifiedAt': paymentDetails.verifiedAt || new Date().toISOString(),
-    'paymentDetails.webhookVerifiedAt': paymentDetails.webhookVerifiedAt || paymentDetails.webhookVerifiedAt,
-    'paymentDetails.failedAt': paymentDetails.failedAt,
-    'paymentDetails.failureReason': paymentDetails.failureReason,
+  const rawPhone = address.phone || address.phoneNumber || address.mobile || contactInfo.phone ;
+  
+  // Clean it up (removes spaces, +91, etc., keeping just the last 10 digits)
+  const customerPhone = String(rawPhone).replace(/\D/g, '').slice(-10);
+  const orderValue = Number(order.totalAmount || order.total || order.finalAmount || order.amount || 0);
+
+  if (paymentMode === 'COD' && orderValue <= 0) {
+    console.warn("Attempted COD Delhivery shipment with 0 amount. Delhivery will reject this.");
+  }
+
+  const userName=address.firstName + " " + address.lastName
+  const finalAddress = address.street + " " + address.apartment + " " + address.city + " " + address.state + address.zip + address.country
+
+  const payload = {
+    "shipments": [
+      {
+        "name": userName, 
+        "add": finalAddress,
+        "pin": String(address.pincode || address.zip), 
+        "city": address.city,
+        "state": address.state,
+        "country": "India",
+        "phone": customerPhone,
+        "order": order.orderId,
+        "payment_mode": paymentMode, // Must be exactly "COD" or "Prepaid"
+        
+        // --- DYNAMIC RETURN ADDRESS ---
+        "return_add": fullSiteAddress,
+        "return_city": siteAddress.city,
+        "return_state": siteAddress.state,
+        "return_pin": siteAddress.pin, 
+        "return_phone": contactInfo.phone,
+        "return_country": "India",
+        
+        "products_desc": productDescription, 
+        "total_amount": orderValue, 
+        "cod_amount": paymentMode === 'COD' ? orderValue : 0, 
+        "order_date": new Date().toISOString(),
+        "seller_name": siteData?.websiteName || "URBANROYALTY SURFACE", 
+        "seller_inv": `INV-${order.orderId}`,
+        "quantity": String(items.reduce((acc, curr) => acc + curr.quantity, 0)),
+        "waybill": "" // Left empty so Delhivery auto-assigns an AWB
+      }
+    ],
+    // --- EXACT REGISTERED PICKUP LOCATION ---
+    "pickup_location": {
+      "name": "URBANROYALTY SURFACE" // Must match your testing credential name exactly
+    }
   };
 
-  const updatePayload = { $set: {}, $push: { tracking: { status: eventLabel, date: today(), location: paymentDetails.source || 'Razorpay' } } };
-  Object.keys(updateFields).forEach((key) => {
-    if (updateFields[key] !== undefined) updatePayload.$set[key] = updateFields[key];
+  // Build key-value URL parameters
+  const params = new URLSearchParams();
+  params.append('format', 'json');
+  params.append('data', JSON.stringify(payload));
+
+  const response = await axios.post(ENDPOINT, params.toString(), {
+    headers: {
+      'Authorization': `Token ${API_TOKEN}`,
+      'Content-Type': 'application/x-www-form-urlencoded'
+    }
   });
 
-  const updatedOrder = await Order.findOneAndUpdate(
-    { orderId: order.orderId },
-    updatePayload,
-    { new: true }
-  ).lean();
-
-  try {
-    const { createInvoiceForOrder } = await import('./invoiceController.js');
-    await createInvoiceForOrder({ order: updatedOrder });
-  } catch (invoiceErr) {
-    console.warn('Invoice creation failed after Razorpay payment confirmation', invoiceErr?.message || invoiceErr);
+  if (response.data && response.data.success) {
+    // Return the generated waybill tracking number
+    return response.data.packages[0].waybill;
+  } else {
+    throw new Error(`Delhivery payload rejected: ${JSON.stringify(response.data)}`);
   }
-
-  return updatedOrder;
 };
 
-// --- CREATE ORDER ---
 export const createOrder = async (req, res) => {
   try {
     const userId = req.user?.id;
@@ -213,14 +257,14 @@ export const createOrder = async (req, res) => {
 
       const thumbnail = variant?.images?.[0] || product.variants?.[0]?.images?.[0] || "";
       let salePrice = product.price || 0;
-const discValue = product.discount?.value || 0;
-const discType = product.discount?.type || 'none';
+      const discValue = product.discount?.value || 0;
+      const discType = product.discount?.type || 'none';
 
-if (discType === 'percentage' && discValue > 0) {
-    salePrice = salePrice - (salePrice * (discValue / 100));
-} else if (discType === 'amount' && discValue > 0) {
-    salePrice = Math.max(0, salePrice - discValue);
-}
+      if (discType === 'percentage' && discValue > 0) {
+        salePrice = salePrice - (salePrice * (discValue / 100));
+      } else if (discType === 'amount' && discValue > 0) {
+        salePrice = Math.max(0, salePrice - discValue);
+      }
 
       enrichedItems.push({
         productId,
@@ -312,31 +356,24 @@ if (discType === 'percentage' && discValue > 0) {
     });
 
     if (!isRazorpay) {
-      // Update coupon usage (if any) BEFORE finalizing response
       if (couponCode) {
         await applyCouponUsage(couponCode, userId);
       }
 
-      // REDUCE STOCK & INCREMENT SALES — do this before returning
       await reduceStockForOrder(enrichedItems);
-
-      // CLEAR CART & INVALIDATE USER ORDERS CACHE
       await clearUserCart(userId);
 
-      // PRODUCT CACHE INVALIDATION — Fetch product details to build explicit cache keys
+      // Cache Invalidation Flow
       try {
         const keysToDelete = new Set(["products:all", "products:featured"]);
 
-        // Fetch each product to get collection/category info for explicit cache invalidation
         for (const item of enrichedItems) {
           try {
             const product = await Product.findOne({ id: item.productId }).lean();
             if (product) {
-              // Add product detail cache key
               keysToDelete.add(`product:detail:${product.id}`);
               keysToDelete.add(`product:detail:${product._id}`);
 
-              // Add collection/category specific cache keys
               const collectionName = product.collectionInfo?.name || '';
               const categoryName = product.categoryInfo?.name || '';
               const collectionId = String(product.collectionInfo?.id || product.collectionInfo?._id || '');
@@ -354,13 +391,11 @@ if (discType === 'percentage' && discValue > 0) {
           }
         }
 
-        // Delete all explicit keys at once
         const keysArray = Array.from(keysToDelete).filter(Boolean);
         if (keysArray.length > 0) {
           await redisClient.del(...keysArray).catch(() => {});
         }
 
-        // Pattern-based sweep as safety net for any remaining list caches
         try {
           for await (const key of redisClient.scanIterator({ MATCH: "products:*" })) {
             await redisClient.del(key).catch(() => {});
@@ -373,7 +408,23 @@ if (discType === 'percentage' && discValue > 0) {
         }
       } catch (err) { console.warn("Cache invalidation error", err); }
 
-      // Create invoice record (immutable) for this order and then return
+      // ----------------------------------------------------
+      // INTEGRATION: PUSH TO DELHIVERY DIRECTLY FOR COD
+      // ----------------------------------------------------
+      try {
+        const waybill = await triggerDelhiveryShipment(order, shippingAddress, enrichedItems, "COD", siteData, totals);
+        if (waybill) {
+          order.awb = waybill;
+          order.tracking.push({ status: "Waybill Generated", date: new Date(), location: "Delhivery" });
+          await order.save();
+        }
+      } catch (delhiveryError) {
+        console.error("Non-fatal: Delhivery COD registration failed:", delhiveryError.message);
+        // The transaction successfully commits inside your system even if delivery logistics time out.
+      }
+      // ----------------------------------------------------
+
+      // Create invoice record
       try {
         const { createInvoiceForOrder } = await import('./invoiceController.js');
         const invoice = await createInvoiceForOrder({ order });
@@ -390,7 +441,81 @@ if (discType === 'percentage' && discValue > 0) {
   }
 };
 
-// --- GET MY ORDERS (WITH CACHING) ---
+export const finalizeRazorpayOrder = async ({ order, paymentDetails = {}, eventLabel = 'Payment Confirmed' }) => {
+  if (!order || !order.orderId) throw new Error('Order is required for finalization');
+  if (['completed', 'failed'].includes(order.paymentStatus)) return order;
+
+  if (order.coupon?.code) {
+    await applyCouponUsage(order.coupon.code, order.userId);
+  }
+
+  await reduceStockForOrder(order.items || []);
+  await clearUserCart(order.userId);
+
+  const updateFields = {
+    paymentStatus: 'completed',
+    paymentMethod: 'razorpay',
+    status: 'Confirmed',
+    isDraft: false,
+    razorpayOrderId: paymentDetails.orderId,
+    'paymentDetails.razorpayPaymentId': paymentDetails.paymentId,
+    'paymentDetails.razorpayOrderId': paymentDetails.orderId,
+    'paymentDetails.verifiedAt': paymentDetails.verifiedAt || new Date().toISOString(),
+    'paymentDetails.webhookVerifiedAt': paymentDetails.webhookVerifiedAt || paymentDetails.webhookVerifiedAt,
+    'paymentDetails.failedAt': paymentDetails.failedAt,
+    'paymentDetails.failureReason': paymentDetails.failureReason,
+  };
+
+  const updatePayload = { $set: {}, $push: { tracking: { status: eventLabel, date: today(), location: paymentDetails.source || 'Razorpay' } } };
+  Object.keys(updateFields).forEach((key) => {
+    if (updateFields[key] !== undefined) updatePayload.$set[key] = updateFields[key];
+  });
+
+  const updatedOrder = await Order.findOneAndUpdate(
+    { orderId: order.orderId },
+    updatePayload,
+    { new: true }
+  ).lean();
+
+  // ----------------------------------------------------
+  // INTEGRATION: PUSH TO DELHIVERY FOR VERIFIED PREPAID
+  // ----------------------------------------------------
+  try {
+    const siteData = await SiteData.findOne({}).lean();
+    
+    const waybill = await triggerDelhiveryShipment(
+      updatedOrder, 
+      updatedOrder.shippingAddress, 
+      updatedOrder.items, 
+      "Prepaid",
+      siteData
+    );
+    
+    if (waybill) {
+      await Order.updateOne(
+        { orderId: updatedOrder.orderId },
+        { 
+          $set: { awb: waybill },
+          $push: { tracking: { status: "Waybill Generated", date: new Date(), location: "Delhivery" } }
+        }
+      );
+      updatedOrder.awb = waybill; // Injects property into memory object for downstream invoice parsing
+    }
+  } catch (delhiveryError) {
+    console.error("Non-fatal: Delhivery Prepaid registration failed:", delhiveryError.message);
+  }
+  // ----------------------------------------------------
+
+  try {
+    const { createInvoiceForOrder } = await import('./invoiceController.js');
+    await createInvoiceForOrder({ order: updatedOrder });
+  } catch (invoiceErr) {
+    console.warn('Invoice creation failed after Razorpay payment confirmation', invoiceErr?.message || invoiceErr);
+  }
+
+  return updatedOrder;
+};
+
 export const getMyOrders = async (req, res) => {
   try {
     const userId = req.user?.id;

@@ -20,7 +20,7 @@ const findOrCreateSiteData = async () => {
     { $setOnInsert: {} },
     {
       upsert: true,
-      new: true,
+      returnDocument: 'after', // Fixed deprecation warning
       setDefaultsOnInsert: true,
     }
   );
@@ -35,9 +35,6 @@ const findOrCreateSiteData = async () => {
 const cacheSiteData = async (siteData) => {
   try {
     if (!redisClient.isOpen) return;
-    // if (isEmptySiteData(siteData)) {
-    //   return;
-    // }
 
     await redisClient.set(SITE_DATA_CACHE_KEY, JSON.stringify(siteData), {
       EX: 3600,
@@ -74,6 +71,7 @@ export const getSiteData = async (req, res) => {
   try {
     const cached = await getCachedSiteData();
     if (cached) {
+      console.log(cached)
       return res.status(200).json({ success: true, siteData: cached, source: "cache" });
     }
 
@@ -81,6 +79,7 @@ export const getSiteData = async (req, res) => {
     const responseData = siteData ?? {};
 
     await cacheSiteData(responseData);
+    console.log(responseData)
     return res.status(200).json({ success: true, siteData: responseData, source: "db" });
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message });
@@ -121,10 +120,21 @@ const saveSiteData = async (req, res) => {
       return res.status(400).json({ success: false, error: "Site data payload is required" });
     }
 
+    // --- Schema Migration Failsafe ---
+    // Clears out the legacy string address before attempting to save the new object structure
+    await SiteData.updateOne(
+      { "contact.address": { $type: "string" } }, 
+      { $unset: { "contact.address": "" } }
+    );
+
     const siteData = await SiteData.findOneAndUpdate(
       {},
       { $set: payload },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
+      { 
+        upsert: true, 
+        returnDocument: 'after', // Fixed deprecation warning
+        setDefaultsOnInsert: true 
+      }
     );
 
     if (!isEmptySiteData(siteData)) {
@@ -142,6 +152,7 @@ const saveSiteData = async (req, res) => {
 };
 
 export const createSiteData = saveSiteData;
+
 export const updateSiteData = async (req, res) => {
   try {
     // If an Admin is attempting to update, start OTP confirmation flow
@@ -226,9 +237,25 @@ export const confirmSiteDataUpdate = async (req, res) => {
     try { store = JSON.parse(raw); } catch (e) { store = null; }
     if (!store || String(store.otp) !== String(otp)) return res.status(400).json({ success: false, error: 'Invalid OTP' });
 
-    // Apply the payload
     const payload = store.payload || {};
-    const siteData = await SiteData.findOneAndUpdate({}, { $set: payload }, { upsert: true, new: true, setDefaultsOnInsert: true });
+
+    // --- Schema Migration Failsafe ---
+    // Clears out the legacy string address before attempting to save the new object structure
+    await SiteData.updateOne(
+      { "contact.address": { $type: "string" } }, 
+      { $unset: { "contact.address": "" } }
+    );
+
+    // Apply the payload
+    const siteData = await SiteData.findOneAndUpdate(
+      {}, 
+      { $set: payload }, 
+      { 
+        upsert: true, 
+        returnDocument: 'after', // Fixed deprecation warning
+        setDefaultsOnInsert: true 
+      }
+    );
 
     if (!isEmptySiteData(siteData)) {
       await cacheSiteData(siteData);

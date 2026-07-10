@@ -145,7 +145,15 @@ const ContactSchema = new mongoose.Schema(
     subheading: { type: String, trim: true, default: "" },
     email: { type: String, trim: true, default: "" },
     phone: { type: String, trim: true, default: "" },
-    address: { type: String, trim: true, default: "" },
+    address: {
+      appartment: { type: String, trim: true, default: "" },
+      street: { type: String, trim: true, default: "" },
+      address: { type: String, trim: true, default: "" }, // Can be used as a full display string
+      city: { type: String, trim: true, default: "" },
+      state: { type: String, trim: true, default: "" },
+      pin: { type: String, trim: true, default: "" },
+      other: { type: String, trim: true, default: "" }
+    },
     workingHours: [
       {
         day: { type: String, trim: true },
