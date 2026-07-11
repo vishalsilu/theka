@@ -71,7 +71,6 @@ export const getSiteData = async (req, res) => {
   try {
     const cached = await getCachedSiteData();
     if (cached) {
-      console.log(cached)
       return res.status(200).json({ success: true, siteData: cached, source: "cache" });
     }
 
@@ -79,7 +78,6 @@ export const getSiteData = async (req, res) => {
     const responseData = siteData ?? {};
 
     await cacheSiteData(responseData);
-    console.log(responseData)
     return res.status(200).json({ success: true, siteData: responseData, source: "db" });
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message });

@@ -108,3 +108,27 @@ export const adminOnly = (req, res, next) => {
 
   next();
 };
+
+export const optionalProtect = async (req, res, next) => {
+    const token = getAuthToken(req);
+
+    // If no token is provided, just move along as a guest
+    if (!token) {
+        return next();
+    }
+
+    try {
+        const user = await resolveUserFromToken(token, req);
+        
+        if (user) {
+            req.user = user; // Populate req.user just like strict protect does
+        } else {
+            console.warn('[server][auth] Optional token provided but invalid, expired, or fingerprint mismatched. Treating as guest.');
+        }
+    } catch (error) {
+        // Catch any unexpected errors (like Redis connection drops) so the user can still browse as a guest
+        console.error('[server][auth] Unexpected error during optional auth validation:', error);
+    }
+
+    next();
+};

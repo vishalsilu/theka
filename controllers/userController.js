@@ -369,67 +369,33 @@ export const getOTPTemplate = (mode, otp, userName, adminLogin) => {
         },
     };
 
-    const config = configs[mode] || configs.login;
+    // 1. Determine the content based on role/mode
+    let title, textContent;
 
     if (adminLogin) {
-        return `
-    <div style="max-width: 580px; margin: 0 auto; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; color: #334155;">
-        <div style="padding: 30px; text-align: center; background-color: #f8fafc; border-bottom: 1px solid #e2e8f0;">
-            <h2 style="margin: 0; color: #1e293b; font-size: 22px;">Admin Sign-In Verification</h2>
-        </div>
-
-        <div style="padding: 40px 30px; text-align: center;">
-            <p style="font-size: 16px; line-height: 1.5; margin-bottom: 30px;">
-              Dear ${userName},We have received an admin sign-in request for your account. If this was you, please use the OTP below to complete your sign-in. Use the code below to <strong>complete your admin sign-in</strong>:
-            </p>
-            
-            <div style="margin: 20px 0;">
-                <span style="display: block; font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 10px;">Verification Code</span>
-                <div style="background: #eff6ff; border: 2px dashed #3b82f6; border-radius: 12px; padding: 20px; display: inline-block;">
-                    <strong style="font-size: 36px; color: #1d4ed8; letter-spacing: 8px; font-family: monospace;">${otp}</strong>
-                </div>
-            </div>
-
-            <p style="font-size: 14px; color: #64748b; margin-top: 25px;">
-                ⚠️ This code is strictly temporary and will expire in <strong>5 minutes</strong>.
-            </p>
-        </div>
-
-        <div style="padding: 20px; text-align: center; background-color: #f8fafc; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8;">
-            <p style="margin: 0;">Urban Security Team</p>
-            <p style="margin: 5px 0 0 0;">If you didn't request this, please secure your account immediately.</p>
-        </div>
-    </div>`;
+        title = "Admin Sign-In Verification";
+        textContent = `We have received an admin sign-in request for your account. If this was you, please use the OTP below to <strong>complete your admin sign-in</strong>.`;
     } else {
-        return `
-    <div style="max-width: 580px; margin: 0 auto; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; color: #334155;">
-        <div style="padding: 30px; text-align: center; background-color: #f8fafc; border-bottom: 1px solid #e2e8f0;">
-            <h2 style="margin: 0; color: #1e293b; font-size: 22px;">${config.title}</h2>
-        </div>
-
-        <div style="padding: 40px 30px; text-align: center;">
-            <p style="font-size: 16px; line-height: 1.5; margin-bottom: 30px;">
-              Dear ${userName}, ${config.message} Use the code below to <strong>${config.action}</strong>:
-            </p>
-            
-            <div style="margin: 20px 0;">
-                <span style="display: block; font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 10px;">Verification Code</span>
-                <div style="background: #eff6ff; border: 2px dashed #3b82f6; border-radius: 12px; padding: 20px; display: inline-block;">
-                    <strong style="font-size: 36px; color: #1d4ed8; letter-spacing: 8px; font-family: monospace;">${otp}</strong>
-                </div>
-            </div>
-
-            <p style="font-size: 14px; color: #64748b; margin-top: 25px;">
-                ⚠️ This code is strictly temporary and will expire in <strong>5 minutes</strong>.
-            </p>
-        </div>
-
-        <div style="padding: 20px; text-align: center; background-color: #f8fafc; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8;">
-            <p style="margin: 0;">Urban Security Team</p>
-            <p style="margin: 5px 0 0 0;">If you didn't request this, please secure your account immediately.</p>
-        </div>
-    </div>`;
+        const config = configs[mode] || configs.login;
+        title = config.title;
+        textContent = `${config.message} Use the code below to <strong>${config.action}</strong>.`;
     }
+
+    // 2. Return the single unified template matching the new UI style
+    return `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e5e5e5; padding: 20px;">
+        <h2 style="color: #dc2626; margin-top: 0;">${title}</h2>
+        <p>Dear <strong>${userName}</strong>,</p>
+        <p>${textContent}</p>
+        
+        <div style="background-color: #f3f4f6; padding: 15px; text-align: center; font-size: 24px; font-weight: bold; letter-spacing: 5px; margin: 20px 0; color: #111827;">
+            ${otp}
+        </div>
+
+        <p style="font-size: 12px; color: #6b7280; margin-top: 20px;">
+            This OTP expires in 5 minutes. If you did not request this, please secure your ${adminLogin ? 'admin account immediately' : 'account'}.
+        </p>
+    </div>`;
 };
 
 export const verifyLoginCredentials = async (req, res) => {
@@ -523,7 +489,7 @@ export const requestEmailOTP = async (req, res) => {
 
         const mailResult = await sendEmail({
             to: normalizedEmail,
-            subject: adminLogin ? "Your Admin Sign-In OTP Code" : "Your One-Time Verification Code",
+            subject: adminLogin ? `Your Admin Sign-In OTP Code : ${otp}` : `Your One-Time Verification Code : ${otp}`,
             html: getOTPTemplate(mode, otp, userName, adminLogin)
         });
 

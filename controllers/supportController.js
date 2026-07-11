@@ -96,7 +96,7 @@ export const replySupportTicketAdmin = async (req, res) => {
       from: 'admin',
       senderName: String(req.user?.email || req.user?.id || 'Admin'),
       senderRole: String(req.user?.role || 'Admin'),
-      adminEmail: req.user?.email, // Added so the React UI can display who replied
+      adminEmail: req.user?.email,
       message: String(message).trim(),
       sentAt: new Date()
     };
@@ -147,10 +147,28 @@ export const replySupportTicketAdmin = async (req, res) => {
 
 export const createSupportTicketUser = async (req, res) => {
   try {
-    const { subject, message } = req.body;
+    const { subject, message, name, email } = req.body;
 
     if (!subject || !message) {
       return res.status(400).json({ success: false, error: 'Subject and message are required' });
+    }
+
+    let ticketUserId = null;
+    let ticketName = '';
+    let ticketEmail = '';
+
+    // If a user session is active via authentication middleware
+    if (req.user) {
+      ticketUserId = req.user.id;
+      ticketName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || 'Customer';
+      ticketEmail = req.user.email;
+    } else {
+      // Validate guest fields explicitly if user is unauthenticated
+      if (!name || !email) {
+        return res.status(400).json({ success: false, error: 'Name and email are required for guest support tickets' });
+      }
+      ticketName = String(name).trim();
+      ticketEmail = String(email).trim();
     }
 
     // Generate a unique, readable Ticket ID (e.g., TKT-A8F9K2)
@@ -158,9 +176,9 @@ export const createSupportTicketUser = async (req, res) => {
     
     const newTicket = new SupportTicket({
       ticketId,
-      userId: req.user.id, // Assumes auth middleware sets req.user
-      name: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || 'Customer',
-      email: req.user.email,
+      userId: ticketUserId, // Stored cleanly as null for guests
+      name: ticketName,
+      email: ticketEmail,
       subject: String(subject).trim(),
       message: String(message).trim(),
       status: 'new',
@@ -169,21 +187,25 @@ export const createSupportTicketUser = async (req, res) => {
 
     await newTicket.save();
 
-    // Send confirmation email to the user
+    // Contextual validation summary instruction string based on login status
+    const trackingNotice = req.user 
+      ? 'You can track this ticket in your user dashboard.' 
+      : 'Our support team will respond directly to your email address.';
+
+    // Send confirmation email to the user or guest address
     const siteConfig = await SiteData.findOne({});
-    const supportSender = siteConfig?.contact?.email || 'support@yourdomain.com';
     
     await sendEmail({
-      to: req.user.email,
+      to: ticketEmail,
       subject: `Support Ticket Created: ${ticketId}`,
       html: `
         <div style="font-family: Arial, sans-serif; color: #1f2937;">
           <h2 style="margin-bottom: 0.5rem;">We received your request</h2>
-          <p style="margin-bottom: 1rem;">Hello ${newTicket.name},</p>
+          <p style="margin-bottom: 1rem;">Hello ${ticketName},</p>
           <p style="margin-bottom: 1rem;">Your support ticket (<strong>${ticketId}</strong>) has been created successfully. Our team will review your message and get back to you shortly.</p>
           <p><strong>Subject:</strong> ${newTicket.subject}</p>
           <hr style="margin: 1.5rem 0; border-color: #e2e8f0;" />
-          <p style="font-size: 0.9rem; color: #475569;">You can track this ticket in your user dashboard.</p>
+          <p style="font-size: 0.9rem; color: #475569;">${trackingNotice}</p>
         </div>
       `
     }).catch(err => console.warn('Ticket confirmation email failed:', err));
@@ -197,11 +219,13 @@ export const createSupportTicketUser = async (req, res) => {
 
 export const getSupportTicketsUser = async (req, res) => {
   try {
-    // Only fetch tickets belonging to the currently authenticated user
-    const tickets = await SupportTicket.find({ userId: req.user.id })
-      .sort({ createdAt: -1 })
-      .lean();
-
+    // Kept safe: non-authenticated users don't hit dashboard indices
+  const tickets = await SupportTicket.find({ 
+    userId: req.user.id, 
+    email: req.user.email 
+})
+.sort({ createdAt: -1 }) // Newest tickets first
+.lean();                 // Returns plain JS objects instead of Mongoose docs (much faster)
     return res.status(200).json({ success: true, tickets });
   } catch (error) {
     console.error('getSupportTicketsUser error:', error);
@@ -212,8 +236,6 @@ export const getSupportTicketsUser = async (req, res) => {
 export const getSupportTicketUser = async (req, res) => {
   try {
     const { ticketId } = req.params;
-    
-    // Ensure the ticket belongs to the user requesting it
     const ticket = await SupportTicket.findOne({ ticketId, userId: req.user.id }).lean();
 
     if (!ticket) {
@@ -236,13 +258,11 @@ export const replySupportTicketUser = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Reply message is required' });
     }
 
-    // Find ticket and verify ownership
     const ticket = await SupportTicket.findOne({ ticketId, userId: req.user.id });
     if (!ticket) {
       return res.status(200).json({ success: false, error: 'Support ticket not found' });
     }
 
-    // Prevent replies if the ticket is closed
     if (ticket.status === 'closed') {
         return res.status(400).json({ success: false, error: 'This ticket is closed. Please open a new ticket for further assistance.' });
     }
@@ -256,16 +276,12 @@ export const replySupportTicketUser = async (req, res) => {
     };
 
     ticket.replies.push(replyPayload);
-    
-    // Automatically switch status to 'open' so admins know the customer has replied
     ticket.status = 'open'; 
     await ticket.save();
 
-    // Fetch site config to send a notification to the admin team
     const siteConfig = await SiteData.findOne({});
     const supportEmail = siteConfig?.contact?.email || 'support@yourdomain.com';
     
-    // Notify the admin team that the customer replied
     await sendEmail({
       to: supportEmail, 
       subject: `[Customer Reply] Ticket: ${ticket.ticketId}`,
