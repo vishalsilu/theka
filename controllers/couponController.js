@@ -38,7 +38,7 @@ export const evaluateCoupon = (coupon, subtotal, userId) => {
 
   return {
     valid: true,
-    message: "Coupon applied",
+    message: "Max Discount limit reached",
     code: coupon.code,
     type: coupon.type,
     value: coupon.value,

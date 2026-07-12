@@ -1,5 +1,6 @@
 import Subscriber from '../models/Subscriber.js';
 import { sendEmail } from '../config/email.js';
+import User from '../models/Users.js';
 
 export const createSubscriber = async (req, res) => {
   try {
@@ -27,10 +28,24 @@ export const listSubscribers = async (req, res) => {
 
 export const sendOfferToSubscribers = async (req, res) => {
   try {
-    const { subject, html } = req.body;
-    if (!subject || !html) return res.status(400).json({ success: false, error: 'subject and html are required' });
+    // 1. Extract targetIds from the request body along with subject and html
+    const { subject, html, targetIds , viewMode } = req.body; 
+    
+    if (!subject || !html) {
+      return res.status(400).json({ success: false, error: 'subject and html are required' });
+    }
 
-    const subs = await Subscriber.find({}).lean();
+    // 2. Build a dynamic query
+    const query = {};
+    if (targetIds && Array.isArray(targetIds) && targetIds.length > 0) {
+      // If targetIds are provided, only find subscribers whose _id is in that array
+      query._id = { $in: targetIds };
+    }
+
+    const ModelToQuery = (viewMode === 'users' ) ? User : Subscriber;
+
+    // 3. Execute the query using the dynamic filter
+    const subs = await ModelToQuery.find(query).lean();
     const emails = subs.map(s => s.email).filter(Boolean);
 
     // Send in simple loop (could be batched / queued in production)
