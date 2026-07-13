@@ -23,6 +23,7 @@ import { startCartSyncCron } from "./utils/cartSync.js";
 import startNamePropagation from "./tasks/namePropagation.js";
 import attributeRoutes from './routes/attributeRoutes.js'
 import { connectToWhatsApp } from './config/whatsapp.js';
+import adRoutes from "./routes/adRoutes.js"
 
 
 const app = express();
@@ -92,6 +93,7 @@ app.use('/api/coupons', couponRoutes)
 app.use('/admin/api/coupons', couponRoutes)
 app.use('/api/site', siteDataRoutes)
 app.use('/admin/api/site', siteDataRoutes)
+app.use('/api/ad', adRoutes)
 app.use('/api', searchRoutes)
 app.use('/api/subscribers', subscriberRoutes);
 app.use('/admin/api/subscribers', subscriberRoutes);

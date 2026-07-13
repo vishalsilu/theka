@@ -5,6 +5,7 @@ import Product from "../models/Product.js";
 import {redisClient} from "../config/redis.js";
 import { deleteFromCloudinary } from "../config/cloudinary.js";
 import { enqueueNamePropagationJob } from "../tasks/namePropagation.js";
+import { json } from 'stream/consumers';
 
 const safeRedisDel = async (keys) => {
     const normalized = Array.isArray(keys) ? keys.flat(Infinity) : [keys];
@@ -22,7 +23,7 @@ const safeRedisDel = async (keys) => {
 };
 
 // 1. Updated Invalidation Logic
-const invalidateCache = async (parentCollectionId = null, categoryId = null) => {
+const invalidateCache = async (parentCollectionId = null, categoryId = null , type = null , category = null) => {
     const keys = [
         "categories:all",
         "navigation:megamenu",
@@ -40,6 +41,10 @@ const invalidateCache = async (parentCollectionId = null, categoryId = null) => 
         keys.push(`category:${categoryId}`);
     }
 
+    if(type && category){
+        keys.push(`categoryAd:${type}/${category}`)
+    }
+
     await safeRedisDel(keys);
 
     // Also clear any dynamic category/collection cache namespaces that may still exist.
@@ -55,14 +60,47 @@ const invalidateCache = async (parentCollectionId = null, categoryId = null) => 
     for await (const key of redisClient.scanIterator({ MATCH: `dynamicFilters:*` })) {
         await safeRedisDel(key);
     }
+    for await (const key of redisClient.scanIterator({ MATCH: `categoryAd:*` })) {
+        await safeRedisDel(key);
+    }
 };
+
+// export const createCategory = async (req, res) => {
+
+//     try {
+//         const categoryData = { ...req.body };
+
+//         if (req.file) {
+//             categoryData.image = req.file.path || req.file.secure_url || req.file.url;
+//         }
+
+//         const newCategory = new Category(categoryData);
+//         await newCategory.save();
+
+//         const parentCollectionId = categoryData.parentCollection?.toString?.() || categoryData.parentCollection || null;
+//         await invalidateCache(parentCollectionId, newCategory._id);
+
+//         res.status(201).json({ success: true, data: newCategory });
+//     } catch (error) {
+//         res.status(500).json({ error: error.message });
+//     }
+// };
+
 
 export const createCategory = async (req, res) => {
     try {
         const categoryData = { ...req.body };
 
-        if (req.file) {
-            categoryData.image = req.file.path || req.file.secure_url || req.file.url;
+        // Handle multiple files
+        if (req.files) {
+            if (req.files.image && req.files.image[0]) {
+                const img = req.files.image[0];
+                categoryData.image = img.path || img.secure_url || img.url;
+            }
+            if (req.files.ad && req.files.ad[0]) {
+                const adImg = req.files.ad[0];
+                categoryData.ad = adImg.path || adImg.secure_url || adImg.url;
+            }
         }
 
         const newCategory = new Category(categoryData);
@@ -81,7 +119,7 @@ export const getAllCategories = async (req, res) => {
     try {
         const cacheKey = "categories:all";
         const cached = await redisClient.get(cacheKey);
-
+ 
         if (cached) {
             try {
                 const parsed = JSON.parse(cached);
@@ -111,26 +149,103 @@ export const getAllCategories = async (req, res) => {
 
 
 
+// export const updateCategory = async (req, res) => {
+//     try {
+//         const { id } = req.params;
+//         const updateData = { ...req.body };
+
+//         // 1. Fetch current category to handle image deletion & parent checks
+//         const category = await Category.findById(id);
+//         if (!category) return res.status(200).json({ message: "Category not found" });
+
+//         // 2. Handle Image Update
+//         if (req.file) {
+//             // Delete old image from Cloudinary if it exists
+//             if (category.image) {
+//                 await deleteFromCloudinary(category.image);
+//             }
+//             // Set the new image path
+//             updateData.image = req.file.path || req.file.secure_url || req.file.url;
+//         }
+
+//         // 3. Perform the Update
+//         const updatedCategory = await Category.findByIdAndUpdate(
+//             id,
+//             { $set: updateData },
+//             { new: true, runValidators: true }
+//         );
+
+//         if (updateData.name) {
+//             const newName = String(updateData.name).trim();
+//             const oldName = String(category?.name || "").trim();
+//             if (newName && oldName && newName !== oldName) {
+//                 enqueueNamePropagationJob({ type: 'category', id, newName }).catch((err) => {
+//                     console.warn('Failed to queue category name propagation job:', err?.message || err);
+//                 });
+//             }
+//         }
+
+//         // 5. Cache Invalidation Logic
+//         const oldParentCollectionId = category.parentCollection?._id || category.parentCollection || null;
+//         await invalidateCache(oldParentCollectionId, id);
+
+//         // 6. Handle Parent Collection Change
+//         const newParentId = updateData.parentCollection || null;
+//         if (newParentId && oldParentCollectionId?.toString() !== newParentId.toString()) {
+//             await invalidateCache(newParentId, id);
+//         }
+
+//         res.status(200).json({ 
+//             success: true, 
+//             message: "Category updated successfully", 
+//             data: updatedCategory 
+//         });
+
+//     } catch (error) {
+//         res.status(500).json({ error: error.message });
+//     }
+// };
+
 export const updateCategory = async (req, res) => {
     try {
         const { id } = req.params;
         const updateData = { ...req.body };
 
-        // 1. Fetch current category to handle image deletion & parent checks
+        // 1. Fetch current category
         const category = await Category.findById(id);
         if (!category) return res.status(200).json({ message: "Category not found" });
 
-        // 2. Handle Image Update
-        if (req.file) {
-            // Delete old image from Cloudinary if it exists
-            if (category.image) {
-                await deleteFromCloudinary(category.image);
+        // 2. Handle Image & Ad Updates/Replacements
+        if (req.files) {
+            // Main Category Image
+            if (req.files.image && req.files.image[0]) {
+                if (category.image) {
+                    await deleteFromCloudinary(category.image);
+                }
+                const img = req.files.image[0];
+                updateData.image = img.path || img.secure_url || img.url;
             }
-            // Set the new image path
-            updateData.image = req.file.path || req.file.secure_url || req.file.url;
+
+            // Ad Image
+            if (req.files.ad && req.files.ad[0]) {
+                if (category.ad) {
+                    await deleteFromCloudinary(category.ad);
+                }
+                const adImg = req.files.ad[0];
+                updateData.ad = adImg.path || adImg.secure_url || adImg.url;
+            }
         }
 
-        // 3. Perform the Update
+        // 3. Handle Explicit Deletion of the Ad (without replacement)
+        // Send a boolean 'removeAd: true' from the frontend if the user clicks "Delete Ad"
+        if (req.body.removeAd === 'true' || req.body.removeAd === true) {
+            if (category.ad) {
+                await deleteFromCloudinary(category.ad);
+                updateData.ad = null; 
+            }
+        }
+
+        // 4. Perform the Update
         const updatedCategory = await Category.findByIdAndUpdate(
             id,
             { $set: updateData },
@@ -167,6 +282,46 @@ export const updateCategory = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 };
+
+export const categoryAdByPath = async (req, res) => {
+    const { type, category } = req.params;
+    const adCache = `categoryAd:${type}/${category}`;
+    
+    try {
+        const cached = await redisClient.get(adCache);
+        
+        // FIX 1: Check if the 'cached' data exists, not the string key
+        if (cached) {
+            // FIX 2: Parse the actual cached data
+            const result = JSON.parse(cached);
+            // FIX 3: Return a proper Express response
+            return res.status(200).json({ success: true, ad: result.ad , url:result.adUrl});
+        }
+        
+        const expectedPath = `/${type.toLowerCase()}/${category.toLowerCase().replace(/\s+/g, '-')}`;
+
+        const categoryData = await Category.findOne({ path: expectedPath }).select('ad adUrl');
+
+        if (!categoryData || !categoryData.ad) {
+            return res.status(200).json({ success: false, message: "Ad not found." });
+        }
+
+        await redisClient.setEx(adCache, 86400, JSON.stringify(categoryData));
+        
+        return res.status(200).json({ success: true, ad: categoryData.ad , url:categoryData.adUrl});
+        
+    } catch (error) {
+        console.error("Error in categoryAdByPath:", error);
+        
+        // It's good practice to await Redis operations in modern Node Redis clients
+        if (redisClient.isOpen) {
+            await redisClient.del(adCache); 
+        }
+        
+        return res.status(500).json({ success: false, message: "Internal server error" });
+    }
+}
+
 
 export const deleteCategory = async (req, res) => {
     try {

@@ -1,42 +1,48 @@
 import mongoose from "mongoose";
 
 const categorySchema = new mongoose.Schema({
-    name: { 
-        type: String, 
-        required: true, 
-        trim: true 
+    name: {
+        type: String,
+        required: true,
+        trim: true
     },
-    path: { 
-        type: String, 
-        required: true, 
-        unique: true 
+    path: {
+        type: String,
+        required: true,
+        unique: true
     },
-    wearType: { 
-        type: String, 
-        enum: ['TopWear', 'FootWear', 'Accessories' , 'BottomWear', 'Outerwear', 'Underwear', 'Activewear', 'Sleepwear', 'Swimwear',"FreeSize"], 
-        required: true 
+    wearType: {
+        type: String,
+        enum: ['TopWear', 'FootWear', 'Accessories', 'BottomWear', 'Outerwear', 'Underwear', 'Activewear', 'Sleepwear', 'Swimwear', "FreeSize"],
+        required: true
     },
-    image: { 
-        type: String, 
-        required: true 
+    image: {
+        type: String,
+        required: true
     },
-    description: { 
-        type: String 
+    ad: {
+        type: String
     },
-    metaTitle: { 
-        type: String 
+    adUrl: {
+        type: String
     },
-    isActive: { 
-        type: Boolean, 
-        default: true 
+    description: {
+        type: String
     },
-    parentCollection: { 
-        type: mongoose.Schema.Types.ObjectId, 
-        ref: 'Collection', 
-        required: true 
+    metaTitle: {
+        type: String
+    },
+    isActive: {
+        type: Boolean,
+        default: true
+    },
+    parentCollection: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Collection',
+        required: true
     }
-}, { 
-    timestamps: true 
+}, {
+    timestamps: true
 });
 
 
