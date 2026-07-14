@@ -103,7 +103,6 @@ export const getAdById = async (req, res) => {
 export const getSingleAd = async (req, res) => {
     try {
         const { collectionName, categoryName } = req.query;
-        console.log("Looking for:", collectionName, categoryName);
 
         if (!collectionName || !categoryName) {
             return res.status(400).json({ 
@@ -117,7 +116,6 @@ export const getSingleAd = async (req, res) => {
         const cachedAd = await redisClient.get(cacheKey);
         
         if (cachedAd) {
-            console.log("Returned cached");
             return res.status(200).json({ 
                 success: true, 
                 data: JSON.parse(cachedAd) 
@@ -125,13 +123,33 @@ export const getSingleAd = async (req, res) => {
         }
 
         // THE FIX: Use Regex for case-insensitive matching and trim whitespace
-        const filter = {
-            'collectionInfo.name': { $regex: new RegExp(`^${collectionName.trim()}$`, 'i') },
-            'categoryInfo.name': { $regex: new RegExp(`^${categoryName.trim()}$`, 'i') }
-        };
+       // Helper function to build a flexible regex
+const buildFlexibleRegex = (searchTerm) => {
+    if (!searchTerm) return '';
 
-        const ad = await Ad.findOne(filter).sort({ _id: -1 }); 
-        console.log("Found Ad in DB:", ad);
+    // 1. Trim leading and trailing spaces
+    let formattedTerm = searchTerm.trim();
+
+    // 2. Escape special regex characters to prevent regex injection
+    // (e.g., if a user sends a string with (, ), or *, it won't break the query)
+    formattedTerm = formattedTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    // 3. Replace any sequence of spaces or hyphens with a regex pattern 
+    // that matches one or more spaces OR hyphens: [\s\-]+
+    formattedTerm = formattedTerm.replace(/[\s\-]+/g, '[\\s\\-]+');
+
+    // 4. Return the case-insensitive ('i') RegExp matching the exact string (^...$)
+    return new RegExp(`^${formattedTerm}$`, 'i');
+};
+
+// Apply the helper function to your filter
+const filter = {
+    'collectionInfo.name': buildFlexibleRegex(collectionName),
+    'categoryInfo.name': buildFlexibleRegex(categoryName)
+};
+
+const ad = await Ad.findOne(filter).sort({ _id: -1 });
+
 
         if (!ad) {
             return res.status(200).json({ 
